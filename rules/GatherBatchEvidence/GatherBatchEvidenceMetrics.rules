@@ -1,0 +1,158 @@
+########################################DELDepth########################################
+
+rule MergedDepDELMetrics:
+    input:
+        rules.MergeSet_Del.output
+    output:
+        OUTPUT_DIR + "/GatherBatchEvidence/DP/" + "DEL.merged-depth.tsv"
+    params:
+        contig_list = config['ref_38']['primary_contigs_list'],
+    conda:
+        "../../envs/genomeAD.yaml"
+    threads: workflow.cores * 0.2
+    shell:
+        """
+            svtest merged-depth {input} {params.contig_list} DEL > {output}
+        """
+
+########################################DUPDepth########################################
+
+rule MergedDepDUPMetrics:
+    input:
+        rules.MergeSet_Dup.output
+    output:
+        OUTPUT_DIR + "/GatherBatchEvidence/DP/" + "DUP.merged-depth.tsv"
+    params:
+        contig_list = config['ref_38']['primary_contigs_list'],
+    conda:
+        "../../envs/genomeAD.yaml"
+    shell:
+        """
+            svtest merged-depth {input} {params.contig_list} DUP > {output}
+        """
+
+########################################SR########################################
+
+rule SRMetrics:
+    input:
+        sr_file = rules.RunPESRCollection.output.sr,
+    output:
+        OUTPUT_DIR + '/GatherSampleEvidence/PESR_Collection/Metrics/{sample}.sr-file.tsv'
+    threads: workflow.cores * 0.2
+    conda:
+        "../../envs/genomeAD.yaml"
+    shell:
+        """
+            echo {wildcards.sample} > tmp/{wildcards.sample}.SR.temp
+            svtest sr-file {input.sr_file} tmp/{wildcards.sample}.SR.temp > {output}
+            rm tmp/{wildcards.sample}.SR.temp
+        """
+
+########################################MANTA########################################
+
+rule VCFMetrics_manta:
+    input:
+        st_vcf = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/manta/{sample}.standardize.sort.pesr.manta.vcf.gz',
+    output:
+        OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/manta/Metrics/{sample}.manta.vcf.tsv'
+    params:
+        types = "DEL,DUP,INS,INV,BND",
+        contig_list = config['ref_38']['primary_contigs_list'],
+    threads: workflow.cores * 0.2
+    conda:
+        "../../envs/genomeAD.yaml"
+    shell:
+        """
+            echo {wildcards.sample} > tmp/{wildcards.sample}.manta.temp
+            svtest vcf {input.st_vcf} {params.contig_list} tmp/{wildcards.sample}.manta.temp {params.types} {wildcards.sample} > {output}
+            rm tmp/{wildcards.sample}.manta.temp        
+        """
+########################################WHAM########################################
+
+rule VCFMetrics_wham:
+    input:
+        st_vcf = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/wham/{sample}.standardize.sort.pesr.wham.vcf.gz',
+    output:
+        OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/wham/Metrics/{sample}.wham.vcf.tsv'
+    params:
+        types = "DEL,DUP,INS,INV,BND",
+        contig_list = config['ref_38']['primary_contigs_list'],
+    threads: workflow.cores * 0.2
+    conda:
+        "../../envs/genomeAD.yaml"
+    shell:
+        """
+        echo {wildcards.sample} > tmp/{wildcards.sample}.wham.temp
+        svtest vcf {input.st_vcf} {params.contig_list} tmp/{wildcards.sample}.wham.temp {params.types} {wildcards.sample} > {output}
+        rm tmp/{wildcards.sample}.wham.temp
+        """
+
+########################################PE########################################
+
+rule PEMetrics:
+    input:
+        pe_file = rules.RunPESRCollection.output.pe,
+    output:
+        OUTPUT_DIR + '/GatherSampleEvidence/PESR_Collection/Metrics/{sample}.pe-file.tsv'
+    threads: workflow.cores * 0.2
+    conda:
+        "../../envs/genomeAD.yaml"
+    shell:
+        """
+            echo {wildcards.sample} > tmp/{wildcards.sample}.pe.temp
+            svtest pe-file {input.pe_file} tmp/{wildcards.sample}.pe.temp > {output}
+            rm tmp/{wildcards.sample}.pe.temp
+        """
+########################################COUNT########################################
+
+rule CountsMetrics:
+    input:
+        counts_file = rules.zip_CollectCounts.output,
+    output:
+        OUTPUT_DIR + '/GatherSampleEvidence/CollectCounts/Metrics/{sample}.raw-counts.tsv'
+    threads: workflow.cores * 0.2
+    conda:
+        "../../envs/genomeAD.yaml"
+    shell:
+        """
+            echo {wildcards.sample} > tmp/{wildcards.sample}.count.temp
+            svtest raw-counts {input.counts_file} tmp/{wildcards.sample}.count.temp > {output}
+            rm tmp/{wildcards.sample}.count.temp
+        """
+
+########################################BAF########################################
+
+rule BAFMetrics:
+    input:
+        baf_file = rules.GenerateBAF_fromGvcf.output
+    output:
+        OUTPUT_DIR + '/GatherBatchEvidence/MergeEvidence/' + BATCH + '.baf-file.tsv'
+    conda:
+        "../../envs/genomeAD.yaml"
+    params:
+        sample_list = OUTPUT_DIR + "/sample_list.txt"
+    shell:
+        """
+            svtest baf-file {input} {params.sample_list} > {output}
+        """
+
+########################################CONCAT########################################
+
+rule Batch_CatMetrics:
+    input:
+        DepDel = rules.MergedDepDELMetrics.output,
+        DepDUP = rules.MergedDepDUPMetrics.output,
+        BAF = rules.BAFMetrics.output,
+        Manta = expand(rules.VCFMetrics_manta.output,sample = sample_names ),
+        Wham = expand( rules.VCFMetrics_wham.output,sample = sample_names ),
+        SR = expand( rules.SRMetrics.output,sample = sample_names),
+        PE = expand( rules.PEMetrics.output,sample = sample_names),
+        Counts = expand( rules.CountsMetrics.output, sample = sample_names ),
+    output:
+        OUTPUT_DIR + "/GatherBatchEvidence/Metric/" + BATCH + ".All_Metric.tsv"
+    conda:
+        "../../envs/genomeAD.yaml"
+    shell:
+        """
+        cat {input} > {output}
+        """

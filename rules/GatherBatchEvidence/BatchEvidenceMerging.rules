@@ -1,0 +1,116 @@
+
+
+
+################################UPDATE###################################
+rule filter_PESR_file:
+    input:
+        OUTPUT_DIR + '/GatherSampleEvidence/PESR_Collection/{sample}.{evidence}.txt.gz'
+    output:
+        OUTPUT_DIR + '/GatherBatchEvidence/MergeEvidence/{sample}.filtered.{evidence}.txt'
+    wildcard_constraints:
+        evidence='(pe|sr)'
+    params:
+        inclusion_bed = config['ref_38']['inclusion_bed']
+    shell:
+        """
+        tabix -h -R {params.inclusion_bed} {input} > {output}
+        """
+
+rule merge_PESR:
+    input:
+        expand(OUTPUT_DIR + '/GatherSampleEvidence/PESR_Collection/{sample}.{{evidence}}.txt.gz',sample = sample_names)
+    output:
+        filter = temp(OUTPUT_DIR + '/GatherBatchEvidence/MergeEvidence/' + BATCH + '.filter.{evidence}.txt'),
+        final = OUTPUT_DIR + '/GatherBatchEvidence/MergeEvidence/' + BATCH + '.{evidence}.txt.gz',
+    wildcard_constraints:
+        evidence='(pe|sr)'
+    shell:
+        """
+        zcat {input} > {output.filter}
+        sort -k1,1V -k2,2n {output.filter} | bgzip -c > {output.final}
+        tabix -f -s1 -b 2 -e 2 {output.final}
+        """
+
+
+# rule Merge_Evidence_PE:
+#     input:
+#         expand(OUTPUT_DIR + '/GatherSampleEvidence/PESR_Collection/{sample}.pe.txt.gz',sample = sample_names)
+#     output:
+#         OUTPUT_DIR + '/GatherBatchEvidence/MergeEvidence/' + BATCH + '.pe.txt.gz',
+#     params:
+#         sample_list = OUTPUT_DIR + "/sample_list.txt",
+#         mem=JV_MEM,
+#         ref_dict="resource/Homo_sapiens_assembly38.dict",
+#     singularity:
+#         "sif_images/gatk-nightly_latest.sif"
+#     shell:
+#         """
+#         echo {input} | tr " " "\\n" > tmp/evidence_pe.list
+
+#         gatk --java-options "{params.mem}" PrintSVEvidence \\
+#             -F tmp/evidence_pe.list \\
+#             --sample-names {params.sample_list} \\
+#             --sequence-dictionary {params.ref_dict} \\
+#             -O {output}
+#         """
+
+# rule Merge_Evidence_SR:
+#     input:
+#         expand(OUTPUT_DIR + '/GatherSampleEvidence/PESR_Collection/{sample}.sr.txt.gz',sample = sample_names)
+#     output:
+#         OUTPUT_DIR + '/GatherBatchEvidence/MergeEvidence/' + BATCH + '.sr.txt.gz',
+#     params:
+#         sample_list = OUTPUT_DIR + "/sample_list.txt",
+#         mem=JV_MEM,
+#         ref_dict="resource/Homo_sapiens_assembly38.dict",
+#     singularity:
+#         "sif_images/gatk-nightly_latest.sif"
+#     shell:
+#         """
+#         echo {input} | tr " " "\\n" > tmp/evidence_sr.list
+#         gatk --java-options "{params.mem}" PrintSVEvidence \\
+#             -F tmp/evidence_sr.list \\
+#             --sample-names {params.sample_list} \\
+#             --sequence-dictionary {params.ref_dict} \\
+#             -O {output}
+#         """
+
+# rule renameLD:
+#     input:
+#         file=OUTPUT_DIR + '/GatherSampleEvidence/PESR_Collection/{sample}.ld.txt.gz',
+#         idx =OUTPUT_DIR + '/GatherSampleEvidence/PESR_Collection/{sample}.ld.txt.gz.tbi', 
+#     output:
+#         file=OUTPUT_DIR + '/GatherSampleEvidence/PESR_Collection/{sample}.sd.txt.gz',
+#         idx =OUTPUT_DIR + '/GatherSampleEvidence/PESR_Collection/{sample}.sd.txt.gz.tbi'
+#     shell:
+#         """
+#         mv {input.file} {output.file}
+#         mv {input.idx} {output.idx}
+#         """
+    
+# rule Merge_Evidence_LD:
+#     input:
+#         expand(OUTPUT_DIR + '/GatherSampleEvidence/PESR_Collection/{sample}.sd.txt.gz',sample = sample_names)
+#     output:
+#         OUTPUT_DIR + '/GatherBatchEvidence/MergeEvidence/' + BATCH + '.baf.txt.gz',
+#     params:
+#         sample_list = OUTPUT_DIR + "/sample_list.txt",
+#         mem=JV_MEM,
+#         ref_dict="resource/Homo_sapiens_assembly38.dict",
+#         sd_loc = config['ref_38']['sd_loc']
+#     singularity:
+#         "sif_images/gatk-2.sif"
+#     shell:
+#         """
+#         echo {input} | tr " " "\\n" > tmp/evidence_ld.list
+#         awk '/txt\\.gz$/' tmp/evidence_ld.list | while read fil; do
+#             tabix -f -s1 -b2 -e2 $fil
+#         done
+#         gatk --java-options "{params.mem}" SiteDepthtoBAF \\
+#             -F tmp/evidence_ld.list \\
+#             --sample-names {params.sample_list} \\
+#             --sequence-dictionary {params.ref_dict} \\
+#             --baf-sites-vcf {params.sd_loc} \\
+#             -O {output}
+#         """
+

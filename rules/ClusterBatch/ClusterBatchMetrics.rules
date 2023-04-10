@@ -1,0 +1,86 @@
+########################################MANTA########################################
+rule ClusterBatchMetric_manta:
+    input:
+        rules.concat_manta_vcf.output
+    output:
+        OUTPUT_DIR + "/ClusterBatch/Metric/" + BATCH + ".manta_clustered.vcf.tsv"
+    conda: "../../envs/genomeAD.yaml"
+    params:
+        contig_list = config['ref_38']['primary_contigs_list'],
+        types = "DEL,DUP,INS,INV,BND",
+        sample_list= OUTPUT_DIR + "/sample_list.txt",
+        prefix="manta_clustered"
+    shell:
+        """
+            svtest vcf \\
+                {input} \\
+                {params.contig_list} \\
+                {params.sample_list} \\
+                {params.types} \\
+                {params.prefix} \\
+                > {output}
+        """
+
+########################################WHAM########################################
+
+rule ClusterBatchMetric_wham:
+    input:
+        rules.concat_wham_vcf.output
+    output:
+        OUTPUT_DIR + "/ClusterBatch/Metric/" + BATCH + ".wham_clustered.vcf.tsv"
+    conda: "../../envs/genomeAD.yaml"
+    params:
+        contig_list = config['ref_38']['primary_contigs_list'],
+        types = "DEL,DUP",
+        sample_list= OUTPUT_DIR + "/sample_list.txt",
+        prefix="wham_clustered"
+    shell:
+        """
+            svtest vcf \\
+                {input} \\
+                {params.contig_list} \\
+                {params.sample_list} \\
+                {params.types} \\
+                {params.prefix} \\
+                > {output}
+        """
+
+########################################DEPTH########################################
+
+rule ClusterBatchMetric_depth:
+    input:
+        rules.MakeDepth_VCF.output.vcf
+    output:
+        OUTPUT_DIR + "/ClusterBatch/Metric/" + BATCH + ".depth_clustered.vcf.tsv"
+    conda: "../../envs/genomeAD.yaml"
+    params:
+        contig_list = config['ref_38']['primary_contigs_list'],
+        types = "DEL,DUP",
+        sample_list= OUTPUT_DIR + "/sample_list.txt",
+        prefix="depth_clustered"
+    shell:
+        """
+            svtest vcf \\
+                {input} \\
+                {params.contig_list} \\
+                {params.sample_list} \\
+                {params.types} \\
+                {params.prefix} \\
+                > {output}
+        """
+
+########################################CONCAT########################################
+
+rule Cluster_CatMetrics:
+    input:
+        depth = rules.ClusterBatchMetric_depth.output,
+        manta = rules.ClusterBatchMetric_manta.output,
+        wham = rules.ClusterBatchMetric_wham.output,
+    output:
+        OUTPUT_DIR + "/ClusterBatch/Metric/" + BATCH + ".cluster_metrics.tsv"
+    threads:
+        workflow.cores * 0.2
+    shell:
+        """
+            cat {input.depth} {input.manta} {input.wham} > {output}
+        """

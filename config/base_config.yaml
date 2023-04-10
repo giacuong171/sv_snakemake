@@ -1,0 +1,44 @@
+samples: "/home/cuong.pham/gatk_sv_100/sample_df.tsv"
+
+base:
+  wf_dir: "/home/cuong.pham/Exec/gatk_sv_snakemake/"
+  data_dir: "/3par/disk1/1KVG/BAM"
+  results_dir: "/home/cuong.pham/gatk_sv_100"
+  sample_list: "/home/cuong.pham/gatk_sv_100/sample_list.txt"
+  tmp_dir: "tmp/"
+  batch: "VN_01"
+  primary_contig_list: "/home/cuong.pham/Exec/gatk_sv_snakemake/resource/GatherEvidence/primary_contigs.list"
+  mem_mb: 30000
+  gender_file: "/home/cuong.pham/gatk_sv_100/gender_sample.txt"
+  fam_file: "/home/cuong.pham/gatk_sv_100/gender_sample.fam"
+  GVCF: "/3par/disk1/1KVG/VCF/1KVG_CPG_extracted.vcf.gz"
+  ped: "/home/cuong.pham/gatk_sv_100/VN_01.ped"
+
+SV_callers:
+  manta: 1
+  melt : 0
+  wham : 1
+  #TODO: add more SV-callers
+
+manta:
+  memory: 10
+
+
+wham:
+  include_list: "resource/GatherEvidence/wham_whitelist.bed"
+
+evidenceQC:
+  binsize : 100
+  wgd_scoring_mask: "src/WGD/refs/WGD_scoring_mask.rawCov.100bp.hg38.bed"
+
+GBE:
+  ref_panel_bincov_matrix: "resource/GatherBatchEvidence/ref_panel_1kg_v1.bincov.bed.gz"
+
+TrainGCNV:
+  NUMBER_INTERVALS: 8
+
+JAVA_ARGS:
+  MAX_MEMORY: 10G
+
+GATK:
+  MAX_THREADS: 12

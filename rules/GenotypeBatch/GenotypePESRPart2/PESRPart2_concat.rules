@@ -1,0 +1,45 @@
+rule TripleStreamCat_pass:
+    input:
+        lt5kb = rules.GenotypeSRPart2_lt5kb.output.bothside_pass,
+        gt5kb = rules.GenotypeSRPart2_gt5kb.output.bothside_pass,
+        bca = rules.GenotypeSRPart2_bca.output.bothside_pass,
+    output:
+        OUTPUT_DIR + '/GenotypeBatch/GenotypePESRPart2/SR_concat/' + BATCH + '.genotype_SR_part2_bothside_pass.txt'
+    shell:
+        """
+        cat {input.lt5kb} {input.gt5kb} {input.bca} \\
+            | sort -Vk1,1 \\
+            | uniq > {output}
+            """
+
+rule TripleStreamCat_fail:
+    input:
+        lt5kb = rules.GenotypeSRPart2_lt5kb.output.background_fail,
+        gt5kb = rules.GenotypeSRPart2_gt5kb.output.background_fail,
+        bca = rules.GenotypeSRPart2_bca.output.background_fail,
+    output:
+        OUTPUT_DIR + '/GenotypeBatch/GenotypePESRPart2/SR_concat/' + BATCH + '.genotype_SR_part2_background_fail.txt'
+    shell:
+        """
+        cat {input.lt5kb} {input.gt5kb} {input.bca} \\
+            | sort -Vk1,1 \\
+            | uniq > ~{outfile}
+            """
+
+rule ConcatGenotypedVcfs:
+    input:
+        lt5kb = rules.AddGenotypes_lt5kb.output.genotype_vcf,
+        gt5kb = rules.AddGenotypes_gt5kb.output.genotype_vcf,
+        bca = rules.AddGenotypes_bca.output.genotype_vcf,
+    output:
+        OUTPUT_DIR + '/GenotypeBatch/GenotypePESRPart2/Result_vcf/' + BATCH + '.pesr.vcf.gz'
+    conda:
+        "../../../envs/genomeAD.yaml"
+    shell:
+        """
+        vcf-concat {input.lt5kb} {input.gt5kb} {input.bca} \\
+            | vcf-sort -c \\
+            | bgzip -c > {output}
+        tabix -p vcf {output}
+        """
+

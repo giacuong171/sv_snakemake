@@ -1,0 +1,105 @@
+
+
+# rule gatherevidence:
+#     input:
+#         bed = OUTPUT_DIR + "/GenerateBatchMetrics/All_Beds/SEP/" + BATCH + '.{chrom}.{source}.bed',
+#         cov = rules.ZPaste.output.matrix_file,
+#     output:
+#         local =OUTPUT_DIR + '/GenerateBatchMetrics/BAFtest/Metrics/' + BATCH + '.{source}.{chrom}.txt.gz',
+#     params:
+#         dict ="/home/cuong.pham/Exec/gatk_sv_snakemake/resource/Homo_sapiens_assembly38.dict",
+#         mem=JV_MEM,
+#         batch=BATCH,
+#     threads: GATK_thread
+#     conda:
+#         "../../envs/gatk.yaml"
+#     shell:
+#         """
+#         gatk --java-options "{params.mem}" PrintSVEvidence \\
+#             --sequence-dictionary {params.dict} \\
+#             --evidence-file {input.cov} \\
+#             -L {wildcards.chrom} \\
+#             -O {output.local}
+#         tabix -s1 -b2 -e2 {output.local}
+#         """
+
+rule batch_key:
+    input:
+        sample = OUTPUT_DIR + "/sample_list.txt",
+    output:
+        batch_key = OUTPUT_DIR + '/GenerateBatchMetrics/BAFtest/Metrics/' + BATCH + '.key'
+    params:
+        batch = BATCH
+    threads: 2
+    shell:
+        """
+        set -euo pipefail
+
+        echo -e "sample\\tgroup\\tbatch" > {output}
+        awk -v batch={params.batch} -v OFS="\\t" '{{print $1, $1, batch}}' \\
+                {input.sample} >> {output}
+        """
+
+rule extractSVEvidence:
+    input:
+        bed = OUTPUT_DIR + "/GenerateBatchMetrics/All_Beds/SEP/" + BATCH + '.{chrom}.{source}.bed',
+        baf_metric = rules.GenerateBAF_fromGvcf.output,
+    output:
+        tp = temp(OUTPUT_DIR + '/GenerateBatchMetrics/BAFtest/evidence/local.{chrom}.{source}.BAF.txt'),
+        final = OUTPUT_DIR + '/GenerateBatchMetrics/BAFtest/evidence/local.{chrom}.{source}.BAF.txt.gz'
+    params:
+        ref_dict="resource/Homo_sapiens_assembly38.dict",
+        mem=JV_MEM,
+    singularity:
+        "sif_images/gatk-nightly_latest.sif"
+    shell:
+        """
+        set +o pipefail
+        start=$(cut -f2 {input.bed} | sort -k1,1n | head -n1)
+        end=$(cut -f3 {input.bed} | sort -k1,1n | tail -n1)
+        chrom=$(cut -f1 {input.bed} | head -n1)
+        set -o pipefail
+
+        gatk --java-options "{params.mem}" PrintSVEvidence \\
+            --sequence-dictionary {params.ref_dict} \\
+            --evidence-file {input.baf_metric} \\
+            -L "$chrom:$start-$end" \\
+            -O {output.tp}
+        bgzip -c {output.tp} > {output.final}
+        tabix -s1 -b2 -e2 {output.final}
+        """
+
+rule BAFtest:
+    input:
+        baf = rules.extractSVEvidence.output.final,
+        bed = OUTPUT_DIR + "/GenerateBatchMetrics/All_Beds/SEP/" + BATCH + '.{chrom}.{source}.bed',
+        batch_key = rules.batch_key.output
+    output:
+        metrics=OUTPUT_DIR + '/GenerateBatchMetrics/BAFtest/' + BATCH + '.{source}.{chrom}.stats',
+    conda:
+        "../../envs/genomeAD.yaml"
+    threads: workflow.cores * 0.4
+    shell:
+        """
+        svtk baf-test {input.bed} {input.baf} --batch {input.batch_key} > {output}
+        """
+
+rule MergeStats_BAF:
+    input:
+        expand(OUTPUT_DIR + '/GenerateBatchMetrics/BAFtest/' + BATCH + '.{source}.{chrom}.stats',source = ['manta','wham','depth'],chrom=AUTOSOMAL )
+    output:
+        OUTPUT_DIR + '/GenerateBatchMetrics/Results/' + BATCH + '.BAF.stats'
+    threads: 2
+    shell:
+        """
+        set -eu
+        echo -n "chrom start end name samples svtype delstat snp_ratio " > {output}
+        echo -n "del_loglik dupstat KS_stat KS_pval total_case_snps " >> {output}
+        echo -n "total_snps n_nonROH_cases n_samples mean_control_snps " >> {output}
+        echo "n_nonROH_controls n_controls" >> {output}
+        sed -i -e 's/ /\\t/g' {output} 
+        for f in {input}; 
+        do 
+            cat $f >> {output}; 
+        done
+        """

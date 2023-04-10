@@ -1,0 +1,103 @@
+rule AggregateTests:
+    input:
+        vcf = OUTPUT_DIR + "/GenerateBatchMetrics/All_VCFs/" + BATCH + ".{source}.vcf.gz",
+        baf = rules.MergeStats_BAF.output,
+        sr = rules.MergeStats_SR.output,
+        pe = rules.MergeStats_PE.output,
+        rd = rules.MergeStats_RD.output,
+    output:
+        OUTPUT_DIR + "/GenerateBatchMetrics/aggregate/aggregate.{source}.metrics"
+    conda:
+        "../../envs/genomeAD.yaml"
+    params:
+        segdup = config['ref_38']['segdup'],
+        rmsk = config['ref_38']['rmsk']
+    threads: workflow.cores * 0.2
+    shell:
+        """
+        src/sv-pipeline/02_evidence_assessment/02e_metric_aggregation/scripts/aggregate.py \\
+            -v {input.vcf} \\
+            -r {input.rd} \\
+            -b {input.baf} \\
+            -p {input.pe} \\
+            -s {input.sr} \\
+            --segdups {params.segdup} \\
+            --rmsk {params.rmsk} {output}
+        """
+
+rule GetCommonVCF:
+    input:
+        vcf = OUTPUT_DIR + "/GenerateBatchMetrics/All_VCFs/" + BATCH + ".{source}.vcf.gz"
+    output:
+        OUTPUT_DIR + "/GenerateBatchMetrics/common_vcf/" + BATCH + ".{source}.common.vcf.gz"
+    conda:
+        "../../envs/genomeAD.yaml"
+    params:
+        cnv_size_cutoff=5000,
+        sample_list = OUTPUT_DIR + "/sample_list.txt"
+    shell:
+        """
+        set -euxo pipefail
+        sample_counts=$(wc -l {params.sample_list} | awk '{{print $1}}')
+        sample_count_cutoff=`expr $sample_counts / 2 - 1`
+        svtk vcf2bed {input.vcf} tmp/info.{wildcards.source}.bed
+        awk '{{print $6}}' tmp/info.{wildcards.source}.bed | awk -F "," '{{print NF-1}}' > tmp/sample_counts.{wildcards.source}.txt
+        paste tmp/info.{wildcards.source}.bed tmp/sample_counts.{wildcards.source}.txt > tmp/info.{wildcards.source}.V2.bed
+        awk '{{if ($NF > '$sample_count_cutoff' && $5!="DEL" && $5!="DUP") print}}' tmp/info.{wildcards.source}.V2.bed | cut -f4 > tmp/common_SVID.{wildcards.source}..txt
+        awk '{{if ($NF > '$sample_count_cutoff' && $5=="DEL" && $3-$2<{params.cnv_size_cutoff}) print}}' tmp/info.{wildcards.source}.V2.bed | cut -f4 >> tmp/common_SVID.{wildcards.source}.txt
+        awk '{{if ($NF > '$sample_count_cutoff' && $5=="DUP" && $3-$2<{params.cnv_size_cutoff}) print}}' tmp/info.{wildcards.source}.V2.bed | cut -f4 >> tmp/common_SVID.{wildcards.source}.txt
+
+        bcftools filter -i 'ID=@tmp/common_SVID.{wildcards.source}.txt' {input.vcf} > tmp/common_SVs.{wildcards.source}.vcf
+
+        scripts/vcf-sort tmp/common_SVs.{wildcards.source}.vcf | bgzip > {output}
+        tabix {output}
+
+        """
+
+rule AggregateTestsCommon:
+    input:
+        vcf = rules.GetCommonVCF.output,
+        sr = rules.MergeStats_SR.output,
+        pe = rules.MergeStats_PE.output,
+    output:
+        OUTPUT_DIR + "/GenerateBatchMetrics/aggregate/common/aggregate.{source}.common.metrics"
+    params:
+        segdup = config['ref_38']['segdup'],
+        rmsk = config['ref_38']['rmsk']
+    conda:
+        "../../envs/genomeAD.yaml"
+    shell:
+        """
+        src/sv-pipeline/02_evidence_assessment/02e_metric_aggregation/scripts/aggregate.py \\
+            -v {input.vcf} \\
+            -p {input.pe} \\
+            -s {input.sr} \\
+            --segdups {params.segdup} \\
+            --rmsk {params.rmsk} {output}
+        """
+
+rule AggregateCallers:
+    input:
+        expand(OUTPUT_DIR + "/GenerateBatchMetrics/aggregate/aggregate.{source}.metrics",source = ['depth','manta','wham'])
+    output:
+        metrics = OUTPUT_DIR + "/GenerateBatchMetrics/Results/" + BATCH + ".aggregate.metrics"
+    shell:
+        """
+            head -n 1 {input[0]} > {output}
+            for file in {input}; do 
+                sed 1d $file >> {output};
+            done
+        """
+
+rule AggregateCallers_common:
+    input:
+        expand(OUTPUT_DIR + "/GenerateBatchMetrics/aggregate/common/aggregate.{source}.common.metrics",source = ['depth','manta','wham'])
+    output:
+        metrics = OUTPUT_DIR + "/GenerateBatchMetrics/Results/" + BATCH + ".aggregate.common.metrics"
+    shell:
+        """
+            head -n 1 {input[0]} > {output}
+            for file in {input}; do 
+                sed 1d $file >> {output};
+            done
+        """

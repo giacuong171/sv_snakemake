@@ -1,0 +1,215 @@
+#TASKS: This part need to be reruned for Wham results.
+
+rule Create_Ploidy_Table_From_Ped:
+    input:
+        ped = config['base']['ped'],
+        contig_list = config['base']['primary_contig_list']
+    output:
+        tmp = temp(OUTPUT_DIR + "/" + BATCH + ".tsv.tmp"),
+        tsv = OUTPUT_DIR + "/" + BATCH + ".tsv"
+    conda:
+        "../../envs/genomeAD.yaml"
+    shell:
+        """
+        scripts/ploidy_table_from_ped.py --ped {input.ped} \\
+            --out {output.tmp} \\
+            --contigs {input.contig_list}
+        sed -e 's/\\t0/\\t1/g' {output.tmp} > {output.tsv}
+        """
+
+
+rule PreparePESR:
+    input: 
+        vcf = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/{caller}/{sample}.{caller}.standardize.sort.vcf.gz',
+        tbl = rules.Create_Ploidy_Table_From_Ped.output.tsv
+    output:
+        tmp = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/{caller}/tmp.vcf.gz',
+        tmp_bed = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/{caller}/ends.bed',
+        vcf = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/{caller}/{sample}.standardize.sort.pesr.{caller}.vcf.gz',
+    conda:
+        "../../envs/genomeAD.yaml"
+    params:
+        pesr_exclude_list= config['ref_38']['pesr_exclude'],
+        genome_file = "resource/genome.sort.file",
+        sv_min=50
+    shell:
+        """
+            python scripts/format_svtk_vcf_for_gatk.py \\
+                --vcf {input.vcf} \\
+                --out {output.tmp} \\
+                --ploidy-table {input.tbl} 
+            
+            bcftools query -f '%CHROM\\t%POS\\t%POS\\t%ID\\t%SVTYPE\\n%CHROM\\t%END\\t%END\t%ID\t%SVTYPE\\n%CHR2\\t%END2\\t%END2\\t%ID\\t%SVTYPE\\n' {output.tmp} \\
+                | awk '$1!="."' \\
+                | sort -k1,1V -k2,2n -k3,3n \\
+                > {output.tmp_bed}
+            bedtools intersect -sorted -u -g {params.genome_file} -wa -a {output.tmp_bed} -b {params.pesr_exclude_list} | cut -f4 | sort | uniq \
+                > tmp/excluded_vids.{wildcards.sample}.{wildcards.caller}.list
+            bcftools view -i 'ID!=@tmp/excluded_vids.{wildcards.sample}.{wildcards.caller}.list && (INFO/SVLEN="." || INFO/SVLEN>={params.sv_min})' {output.tmp} \
+                -Oz -o {output.vcf}
+            tabix {output.vcf}
+            rm tmp/excluded_vids.{wildcards.sample}.{wildcards.caller}.list
+        """
+
+
+rule ClusterPESR:
+    input:
+        ip = expand(rules.PreparePESR.output.vcf,sample=sample_names,caller=CALLER),
+        tbl = rules.Create_Ploidy_Table_From_Ped.output.tsv
+    output:
+        OUTPUT_DIR + "/ClusterBatch/{caller}/" + BATCH + "_{caller}_{chrom}.vcf.gz"
+    params:
+        prefix=BATCH+"_{caller}_{chrom}",
+        exclude_list= "resource/ClusterBatch/PESR.encode.peri_all.repeats.delly.hg38.blacklist.sorted.bed.gz",
+        alg = "SINGLE_LINKAGE",
+        ref = config['ref_38']['fasta'],
+        mem=JV_MEM,
+    threads:
+        workflow.cores * 0.5
+    singularity: "sif_images/gatk_latest.sif"
+    shell:
+        """ 
+            a=""
+            for i in {input.ip}; do a=$a" -V "$i; done
+
+            gatk --java-options "{params.mem}" SVCluster \\
+                $a \\
+            --output {output} \\
+            --ploidy-table {input.tbl} \\
+            --variant-prefix {params.prefix} \\
+            --reference {params.ref} \\
+            -L {wildcards.chrom} \\
+            --algorithm {params.alg} \\
+            --pesr-interval-overlap 0.1 \\
+            --pesr-sample-overlap 0 \\
+            --pesr-breakend-window 300 \\
+            --verbosity DEBUG
+
+            touch {output}
+        """
+
+rule ExcludeIntervalsByEndpoints:
+    input: 
+        vcf = rules.ClusterPESR.output,
+        tbl = rules.Create_Ploidy_Table_From_Ped.output.tsv
+    output:
+        tmp = temp(OUTPUT_DIR + "/ClusterBatch/{caller}/" + BATCH + '.tmp.{chrom}.vcf.gz'),
+        tmp_bed = temp(OUTPUT_DIR +"/ClusterBatch/{caller}/" + BATCH + 'ends.{chrom}.bed'),
+        vcf = OUTPUT_DIR + "/ClusterBatch/{caller}/" + BATCH + "_{caller}_{chrom}.ex.vcf.gz"
+    conda:
+        "../../envs/genomeAD.yaml"
+    params:
+        pesr_exclude_list= config['ref_38']['pesr_exclude'],
+        exclude_list= "resource/ClusterBatch/PESR.encode.peri_all.repeats.delly.hg38.blacklist.sorted.bed.gz",
+        genome_file = "resource/genome.sort.file",
+        sv_min=50
+    shell:
+        """
+            python scripts/format_svtk_vcf_for_gatk.py \\
+                --vcf {input.vcf} \\
+                --out {output.tmp} \\
+                --ploidy-table {input.tbl} 
+            
+            bcftools query -f '%CHROM\\t%POS\\t%POS\\t%ID\\t%SVTYPE\\n%CHROM\\t%END\\t%END\t%ID\t%SVTYPE\\n%CHR2\\t%END2\\t%END2\\t%ID\\t%SVTYPE\\n' {output.tmp} \\
+                | awk '$1!="."' \\
+                | sort -k1,1V -k2,2n -k3,3n \\
+                > {output.tmp_bed}
+            bedtools intersect -sorted -u -g {params.genome_file} -wa -a {output.tmp_bed} -b {params.pesr_exclude_list} | cut -f4 | sort | uniq \
+                > tmp/excluded_vids.{wildcards.chrom}.{wildcards.caller}.list
+            bcftools view -i 'ID!=@tmp/excluded_vids.{wildcards.chrom}.{wildcards.caller}.list && (INFO/SVLEN="." || INFO/SVLEN>={params.sv_min})' {output.tmp} \
+                -Oz -o {output.vcf}
+            tabix {output.vcf}
+            rm tmp/excluded_vids.{wildcards.chrom}.{wildcards.caller}.list
+        """
+
+rule GatkToSvtkVcf:
+    input:
+        gatk = rules.ExcludeIntervalsByEndpoints.output.vcf,
+        tbl = "/home/cuong.pham/gatk_sv_100/contig_list.txt"
+    output:
+        svtk = OUTPUT_DIR + "/ClusterBatch/{caller}/" + BATCH + ".{caller}.{chrom}.ex.svtk.vcf.gz",
+    conda:
+        "../../envs/genomeAD.yaml"
+    shell:
+        """
+        python src/sv-pipeline/scripts/format_gatk_vcf_for_svtk.py \\
+            --vcf {input.gatk} \\
+            --out {output.svtk} \\
+            --source {wildcards.caller} \\
+            --contig {input.tbl} \\
+            --remove-formats CN \\
+            --remove-infos END2
+
+        tabix {output.svtk}
+        """
+
+rule concat_manta_vcf:
+    input:
+        expand(OUTPUT_DIR + "/ClusterBatch/manta/" + BATCH + ".manta.{chrom}.ex.svtk.vcf.gz", chrom  = CONTIG_LIST),
+    output:
+        OUTPUT_DIR + "/ClusterBatch/manta/" + BATCH + ".manta.vcf.gz"
+    conda: "../../envs/genomeAD.yaml"
+    shell:
+        """
+            bcftools concat {input} | bcftools sort | bgzip -c > {output}
+            tabix -p vcf {output}
+        """
+
+rule concat_wham_vcf:
+    input:
+        expand(OUTPUT_DIR + "/ClusterBatch/wham/" + BATCH + ".wham.{chrom}.ex.svtk.vcf.gz", chrom  = CONTIG_LIST),
+    output:
+        OUTPUT_DIR + "/ClusterBatch/wham/" + BATCH + ".wham.vcf.gz"
+    conda: "../../envs/genomeAD.yaml"
+    shell:
+        """
+            bcftools concat {input} | bcftools sort | bgzip -c > {output}
+            tabix -p vcf {output}
+        """
+
+######################################WHAM###################################
+
+# rule ClusterPESR_wham:
+#     input:
+#         expand(rules.sortVCF_wham.output.vcf_gz,sample=sample_names)
+#     output:
+#         OUTPUT_DIR + "/ClusterBatch/wham/" + BATCH + ".wham.{chrom}.vcf.gz"
+#     params:
+#         frac= 0.1,
+#         flags="--preserve-ids",
+#         prefix=BATCH+"_wham_{chrom}",
+#         exclude_list= "resource/ClusterBatch/PESR.encode.peri_all.repeats.delly.hg38.blacklist.sorted.bed.gz",
+#         disc = 300,
+#         svtype="DEL,DUP,INV,BND,INS",
+#     threads:
+#         workflow.cores * 0.2
+#     conda: "../../envs/genomeAD.yaml"
+#     shell:
+#         """ 
+#             echo {input} | tr " " "\\n" > ./tmp/list_vcf.wham.{wildcards.chrom}.txt
+#             svtk vcfcluster ./tmp/list_vcf.wham.{wildcards.chrom}.txt stdout \\
+#                 -r {wildcards.chrom} \\
+#                 -p {params.prefix} \\
+#                 -d {params.disc} \\
+#                 -f {params.frac} \\
+#                 -x {params.exclude_list} \\
+#                 -z 0 \\
+#                 -t {params.svtype} \\
+#                 {params.flags} \\
+#             | bcftools sort \\
+#             | bgzip -c > {output}
+#             rm ./tmp/list_vcf.wham.{wildcards.chrom}.txt
+#         """
+
+# rule concat_wham_vcf:
+#     input:
+#         expand(rules.ClusterPESR_wham.output,chrom=CONTIG_LIST)
+#     output:
+#         OUTPUT_DIR + "/ClusterBatch/wham/" + BATCH + ".wham.vcf.gz"
+#     conda: "../../envs/genomeAD.yaml"
+#     shell:
+#         """
+#             bcftools concat {input} | bcftools sort | bgzip -c > {output}
+#             tabix -p vcf {output}
+#         """
+

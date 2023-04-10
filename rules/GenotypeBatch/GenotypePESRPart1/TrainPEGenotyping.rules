@@ -1,0 +1,133 @@
+rule SplitVCF_PE:
+    input:
+        batch_vcf = rules.MergePesrVcfs.output,
+    output:
+        dynamic(OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/PE/split/{pe}.vcf")
+    params:
+        n_per_split=5000,
+        prefix = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/PE/split/pe"
+    shell:
+        """
+        zcat {input.batch_vcf} | sed -n -e '/^#/p' > tmp/header.vcf;
+        zcat {input.batch_vcf} | sed -e '/^#/d' | split -l {params.n_per_split} - {params.prefix}.
+
+        for f in {params.prefix}.*; do \\
+            cat tmp/header.vcf $f > $f.vcf 
+        done
+        rm tmp/header.vcf
+        """
+
+rule VcfToBed_PE:
+    input:
+        batch_vcf = rules.MergePesrVcfs.output,
+    output:
+        OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/PE/" + BATCH +".pe_genotyping.bed"
+    conda:
+        "../../../envs/genomeAD.yaml"
+    shell:
+        """
+        svtk vcf2bed {input.batch_vcf} -i ALGORITHMS {output}
+        """
+
+rule VcfToBed_Split:
+    input:
+        OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/PE/split/{pe}.vcf"
+    output:
+        OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/PE/split/region.merged.{pe}.bed"
+    conda:
+        "../../../envs/genomeAD.yaml"
+    shell:
+        """
+        svtk vcf2bed --split-bnd --no-header {input} tmp/{wildcards.pe}.bed
+        awk -v OFS="\\t" -v window=500 '{{if ($2-window>0){{print $1,$2-window,$2+window}}else{{print $1,0,$2+window}}}}' tmp/{wildcards.pe}.bed  > tmp/region.{wildcards.pe}.bed
+        awk -v OFS="\\t" -v window=500 '{{if ($3-window>0){{print $1,$3-window,$3+window}}else{{print $1,0,$3+window}}}}' tmp/{wildcards.pe}.bed  >> tmp/region.{wildcards.pe}.bed
+        sort -k1,1 -k2,2n tmp/region.{wildcards.pe}.bed > tmp/region.sorted.{wildcards.pe}.bed
+        bedtools merge -i tmp/region.sorted.{wildcards.pe}.bed > {output}
+
+        rm tmp/{wildcards.pe}.bed \\
+            tmp/region.{wildcards.pe}.bed \\
+            tmp/region.sorted.{wildcards.pe}.bed
+        """
+#BUG
+# rule Evidence_CountPE:
+#     input:
+#         bed = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/PE/split/region.merged.{pe}.bed",
+#         PE_disc = OUTPUT_DIR + '/GatherBatchEvidence/MergeEvidence/' + BATCH + '.pe.txt.gz',
+#     output:
+#         evidence = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/PE/split/local.{pe}.txt.gz"
+#     singularity:
+#         "sif_images/gatk-nightly_latest.sif"
+#     params:
+#         mem=JV_MEM,
+#         ref_dict="resource/Homo_sapiens_assembly38.dict",
+#     shell:
+#         """
+#         gatk --java-options "{params.mem}" \\
+#                 PrintSVEvidence \\
+#                 --sequence-dictionary {params.ref_dict} \\
+#                 --evidence-file {input.PE_disc} \\
+#                 -L {input.bed} \\
+#                 -O {output.evidence}
+#         tabix -f -s1 -b2 -e2 {output.evidence}
+#         """
+
+rule CountPE:
+    input:
+        evidence = OUTPUT_DIR + '/GatherBatchEvidence/MergeEvidence/' + BATCH + '.pe.txt.gz',
+        samples = rules.FilterSampleList.output,
+        med_cov = rules.T_CalcMedCov.output,
+        vcf = rules.MergePesrVcfs.output,
+
+    output:
+        tp = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/PE/pe_counts.txt",
+        final = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/PE/pe_counts.txt.gz",
+    conda:
+        "../../../envs/genomeAD.yaml"
+    shell:
+        """
+        svtk count-pe -s {input.samples} \\
+            --medianfile {input.med_cov} {input.vcf} \\
+            {input.evidence} {output.tp}
+        cat {output.tp} | fgrep -v -e "name" | gzip -c > {output.final}
+        """
+
+# rule MergePECounts:
+#     input:
+#         dynamic(OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/PE/split/{pe}.pe_counts.txt"),
+#     output:
+#         OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/PE/pe_counts.txt.gz"
+#     shell:
+#         """
+#         cat {input} | fgrep -v -e "name" | gzip -c > {output}
+#         """
+
+rule GenotypePEPart1:
+    input:
+        bed = rules.VcfToBed_PE.output,
+        rf_cutoffs = rules.AdjudicateSV.output.cutoffs,
+        pe_counts = rules.CountPE.output.final,
+        rd_genotypes = rules.MergeGenotypeResults.output.genotypes,
+        rd_melted_genotypes = rules.MergeGenotypeResults.output.melted_genotypes,
+    output:
+        PE_train = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/PE/Results/" + BATCH + ".pe.train.include.txt",
+        PE_metrics = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/PE/Results/" + BATCH + ".pe_metric_file.txt",
+        genotypes = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/PE/Results/" + BATCH + ".pe.geno.withquality.txt.gz",
+        varGQ = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/PE/Results/" + BATCH + ".pe.variant.quality.final.txt.gz",        
+    params:
+        pesr_exclude_list= config['ref_38']['pesr_exclude'],
+        prefix =BATCH,
+        op_dir=OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/PE/Results"
+    conda:
+        "../../../envs/genomeAD.yaml"
+    shell:
+        """
+        src/sv-pipeline/04_variant_resolution/scripts/PE_genotype.sh \
+            {input.bed} \\
+            {input.pe_counts} \\
+            {input.rd_genotypes} \\
+            {input.rd_melted_genotypes} \\
+            {input.rf_cutoffs} \\
+            {params.pesr_exclude_list} \\
+            {params.prefix} \\
+            {params.op_dir}
+        """

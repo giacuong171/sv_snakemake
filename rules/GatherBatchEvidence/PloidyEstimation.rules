@@ -1,0 +1,19 @@
+rule BuildPloidyMatrix:
+    input:
+        bincov = rules.ZPaste.output.matrix_file,
+    output:
+        config['base']['results_dir'] + '/GatherBatchEvidence/Ploidy/' + config['base']['batch'] + '_ploidy_matrix.bed.gz'
+    shell:
+        "scripts/BuildPloidyMatrix.sh {input.bincov} {output}"
+
+rule PloidyScore:
+    input:
+        rules.BuildPloidyMatrix.output
+    output:
+        config['base']['results_dir'] + '/GatherBatchEvidence/Ploidy/ploidy_est/sample_sex_assignments.txt.gz'
+    params:
+        op_dir=config['base']['results_dir'] + '/GatherBatchEvidence/Ploidy/ploidy_est'
+    shell:
+        'mkdir {params.op_dir} && '
+        'Rscript ./src/WGD/bin/estimatePloidy.R -z -O {params.op_dir} {input} && '
+        'touch {output}'

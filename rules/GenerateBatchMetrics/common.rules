@@ -1,0 +1,71 @@
+rule GatherAllVcfs:
+    input:
+        depth = rules.MakeDepth_VCF.output.vcf,
+        manta = rules.concat_manta_vcf.output,
+        wham = rules.concat_wham_vcf.output
+    output:
+        depth = OUTPUT_DIR + "/GenerateBatchMetrics/All_VCFs/" + BATCH + ".depth.vcf.gz",
+        manta = OUTPUT_DIR + "/GenerateBatchMetrics/All_VCFs/" + BATCH + ".manta.vcf.gz",
+        wham = OUTPUT_DIR + "/GenerateBatchMetrics/All_VCFs/" + BATCH + ".wham.vcf.gz",
+    threads: 2
+    shell:
+        """
+            ln -s {input.depth} {output.depth}
+            ln -s {input.manta} {output.manta}
+            ln -s {input.wham} {output.wham}
+
+            tabix -fp vcf {output.depth}
+            tabix -fp vcf {output.manta}
+            tabix -fp vcf {output.wham}
+        """
+
+rule convertvcf2bed:
+    input:
+        depth = rules.MakeDepth_VCF.output ,
+        manta = rules.concat_manta_vcf.output,
+        wham = rules.concat_wham_vcf.output,
+    output:
+        depth = OUTPUT_DIR + "/GenerateBatchMetrics/All_Beds/SEP/" + BATCH + ".{chrom}.depth.bed",
+        manta = OUTPUT_DIR + "/GenerateBatchMetrics/All_Beds/SEP/" + BATCH + ".{chrom}.manta.bed",
+        wham = OUTPUT_DIR + "/GenerateBatchMetrics/All_Beds/SEP/" + BATCH + ".{chrom}.wham.bed",
+    conda:
+        "../../envs/genomeAD.yaml"
+    threads: workflow.cores*0.2
+    shell:
+        """
+            tabix -fp vcf {input.depth}
+            tabix -fp vcf {input.manta}
+            tabix -fp vcf {input.wham}
+
+            tabix -h {input.depth} {wildcards.chrom} \\
+               | svtk vcf2bed --no-header stdin stdout > tmp/op_depth_{wildcards.chrom}.bed
+            tabix -h {input.manta} {wildcards.chrom} \\
+               | svtk vcf2bed --no-header stdin stdout > tmp/op_manta_{wildcards.chrom}.bed
+            tabix -h {input.wham} {wildcards.chrom} \\
+               | svtk vcf2bed --no-header stdin stdout > tmp/op_wham_{wildcards.chrom}.bed
+
+            fgrep -e "DEL" -e "DUP" < tmp/op_depth_{wildcards.chrom}.bed \\
+                | awk -v OFS="\\t" '{{print $1, $2, $3, $4, $6, $5}}' > {output.depth}
+            fgrep -e "DEL" -e "DUP" < tmp/op_manta_{wildcards.chrom}.bed \\
+                | awk -v OFS="\\t" '{{print $1, $2, $3, $4, $6, $5}}' > {output.manta}
+            fgrep -e "DEL" -e "DUP" < tmp/op_wham_{wildcards.chrom}.bed \\
+                | awk -v OFS="\\t" '{{print $1, $2, $3, $4, $6, $5}}' > {output.wham}
+
+            rm tmp/op_depth_{wildcards.chrom}.bed \\
+                tmp/op_manta_{wildcards.chrom}.bed \\
+                tmp/op_wham_{wildcards.chrom}.bed
+        """ 
+
+rule make_sex_whitelists:
+    input:
+        whitelist = config['base']['fam_file']
+    output:
+        whitelist= OUTPUT_DIR + '/sexlists/' + BATCH + '.{sex}.list'
+    params:
+        sex=lambda wildcards: 1 if wildcards.sex == 'males' else 2,
+    threads: 2
+    shell:
+        """
+        awk '($5=={params.sex}) {{print $2}}' {input.whitelist} \
+          > {output.whitelist};
+        """

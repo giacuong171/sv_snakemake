@@ -1,0 +1,41 @@
+rule AddBatchSamplesPESR:
+    input:
+        pesr_vcf = rules.MergePesrVcfs.output,
+    output:
+        tp = temp(OUTPUT_DIR + "/GenotypeBatch/" + BATCH + ".pesr.vcf"),
+        final = OUTPUT_DIR + "/GenotypeBatch/" + BATCH + ".pesr.vcf.gz"
+    conda:
+        "../../envs/genomeAD.yaml"
+    shell:
+        """
+        src/sv-pipeline/04_variant_resolution/scripts/add_batch_samples.py {input.pesr_vcf} {input.pesr_vcf} {output.tp}
+        bgzip -c {output.tp} > {output.final}
+        """
+
+rule AddBatchSamplesDepth:
+    input:
+        depth_vcf = OUTPUT_DIR + "/FilterBatch/" + BATCH + ".depth.outliers_removed.vcf.gz"
+    output:
+        tp = temp(OUTPUT_DIR + "/GenotypeBatch/" + BATCH + ".depth.vcf"),
+        final = OUTPUT_DIR + "/GenotypeBatch/" + BATCH + ".depth.vcf.gz"
+    conda:
+        "../../envs/genomeAD.yaml"
+    shell:
+        """
+        src/sv-pipeline/04_variant_resolution/scripts/add_batch_samples.py {input.depth_vcf} {input.depth_vcf} {output.tp}
+        bgzip -c {output.tp} > {output.final}
+        """
+
+rule Subset_ped_file:
+    input:
+        sample_list = rules.FilterSampleList.output,
+    output:
+        subset_ped_file = OUTPUT_DIR + "/GenotypeBatch/" + BATCH + ".subset.ped"
+    params:
+        ped_file = config['base']['ped']
+    conda:
+        "../../envs/genomeAD.yaml"
+    shell:
+        """
+        awk 'FNR==NR {{a[$1]; next}}; $2 in a' {input.sample_list} {params.ped_file} > {output.subset_ped_file}
+        """

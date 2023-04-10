@@ -1,0 +1,151 @@
+#could fix here to run on all SV_Callers
+#Remember to fix svtk vcf template file to tackle the problem with vcf format (Remove format column in python3.10/site-packages/svtk/data template file)
+#Need assign a log file here -> later
+
+rule StandardizeVCF:
+    input:
+        vcf_caller= OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/{caller}/{sample}.{caller}.vcf.gz',
+    output:
+        vcf = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/{caller}/{sample}.{caller}.standardize.vcf.gz',
+        final = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/{caller}/{sample}.{caller}.standardize.sort.vcf.gz',
+    params:
+        min_size = 50,
+        ref_index = config['ref_38']['fasta'] + ".fai",
+    conda:
+        "../../envs/genomeAD.yaml"
+    threads: workflow.cores * 0.2
+    shell:
+        """
+            svtk standardize --min-size {params.min_size} --contig {params.ref_index} {input.vcf_caller} {output.vcf} {wildcards.caller} 
+            bcftools sort {output.vcf} -Oz -o {output.final} 
+        """
+
+# ########################################MANTA#########################################
+
+# rule StandardizeVCF_manta:
+#     input:
+#         vcf_caller= rules.conInv_manta.output.zip_vcf,
+#     output:
+#         vcf = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/manta/{sample}.manta.standardize.vcf.gz',
+#         final = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/manta/{sample}.manta.standardize.sort.vcf.gz',
+#     params:
+#         min_size = 50,
+#         ref_index = config['ref_38']['fasta'] + ".fai",
+#         sv_caller = "manta",
+#     conda:
+#         "../../envs/genomeAD.yaml"
+#     threads: workflow.cores * 0.2
+#     shell:
+#         """
+#             svtk standardize --min-size {params.min_size} --contig {params.ref_index} {input.vcf_caller} {output.vcf} {params.sv_caller} 
+#             bcftools sort {output.vcf} -Oz -o {output.final} 
+#         """
+
+
+#PAUSE
+# rule tinyresolve:
+#     input:
+#         vcf = rules.StandardizeVCF_manta.output.final,
+#         pe = OUTPUT_DIR + '/GatherBatchEvidence/MergeEvidence/' + BATCH + '.pe.txt.gz',
+#     output:
+#         unresolve = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/manta/manta.unresolved.vcf',
+#         final = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/manta/{sample}.manta.complex.vcf.gz',
+#         no_cpx = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/manta/manta.vcf.gz',
+#     conda:
+#         "../../envs/genomeAD.yaml"
+#     params:
+#         mei = config['ref_38']['mei_bed'],
+#         cyto = config['ref_38']['cytoband'],
+#         op_dir =  OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/manta'
+#     threads: 4
+#     shell:
+#         """
+#         src/sv-pipeline/00_preprocessing/scripts/mantatloccheck.sh \\
+#             {input.vcf} {input.pe} {wildcards.sample} {params.mei} {params.cyto} {params.op_dir}
+#         touch {output.final}
+#         touch {output.unresolve}
+#         touch {output.no_cpx}
+#         """
+
+# rule sortVCF_manta:
+#     input:
+#         rules.tinyresolve.output.final
+#     output:
+#         vcf_gz = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/manta/{sample}.manta.standardize.sort.resolve.vcf.gz',
+#         vcf_gz_idx = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/manta/{sample}.manta.standardize.sort.resolve.vcf.gz.tbi'
+#     conda:
+#         "../../envs/bcftools.yaml"
+#     threads: workflow.cores * 0.2
+#     shell:
+#         """
+#             bcftools sort -Oz -o {output.vcf_gz} {input}  
+#             tabix -p vcf {output.vcf_gz}
+#             touch {output.vcf_gz_idx}
+#         """
+
+########################################WHAM#########################################
+
+
+# rule StandardizeVCF_wham:
+#     input:
+#         vcf_caller= rules.runWham_include_list.output.vcf
+#     output:
+#         vcf = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/wham/{sample}.wham.standardize.vcf',
+#     threads: workflow.cores * 0.2
+#     params:
+#         min_size = 50,
+#         ref_index = config['ref_38']['fasta'] + ".fai",
+#         sv_caller = "wham"
+#     conda:
+#         "../../envs/genomeAD.yaml"
+#     shell:
+#         """
+#             svtk standardize --min-size {params.min_size} --contig {params.ref_index} {input.vcf_caller} {output.vcf} {params.sv_caller} 
+            
+#         """
+
+
+# rule sortVCF_wham:
+#     input:
+#         rules.StandardizeVCF_wham.output.vcf
+#     output:
+#         vcf_gz = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/wham/{sample}.wham.standardize.sort.vcf.gz',
+#         vcf_gz_idx = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/manta/{sample}.wham.standardize.sort.vcf.gz.tbi'
+#     conda:
+#         "../../envs/bcftools.yaml"
+#     threads: workflow.cores * 0.2
+#     shell:
+#         """
+#             bcftools sort -Oz -o {output.vcf_gz} {input}  
+#             tabix -p vcf {output.vcf_gz}
+#             touch {output.vcf_gz_idx}
+#         """
+############################################UPDATE##############################################
+#instead of using if statement of shell, we can use if else of snakemake
+
+# rule Standardize_vcf:
+#     input: 
+#         OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/{source}/{sample}.{source}.vcf.gz'
+#     output:
+#         std = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/{source}/{sample}.{source}.standardize.vcf',
+#         vcf = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/{source}/{sample}.{source}.standardize.sort.vcf.gz'
+#     conda:
+#         "../../genomeAD.yaml"
+#     log:
+#         logstd="logs/SV_call/{source}/{sample}.log"
+#     params:
+#         min_size = 50,
+#         ref_index = config['ref_38']['fasta'] + ".fai",
+#     shell:
+#         """
+#         if [[ {wildcards.source}=="scramble" ]]
+#         then
+#             zcat {input} > {output.std}
+#         else
+#             svtk standardize \\
+#                     --min-size {params.min_size} \\
+#                     --contig {params.ref_index} {input.vcf_caller} {output.std} {wildcards.source} 2> {log.logstd}
+#         fi
+#         bcftools sort -Oz -o {output.vcf} {output.std}
+#         tabix -fp vcf {output.vcf}
+#         """

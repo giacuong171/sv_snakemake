@@ -1,0 +1,35 @@
+name: manta
+channels:
+  - bioconda
+  - defaults
+dependencies:
+  - _libgcc_mutex=0.1=main
+  - _openmp_mutex=5.1=1_gnu
+  - bcftools=1.9=ha228f0b_4
+  - bzip2=1.0.8=h7b6447c_0
+  - ca-certificates=2022.4.26=h06a4308_0
+  - certifi=2020.6.20=pyhd3eb1b0_3
+  - curl=7.71.1=h8f29fe8_2
+  - krb5=1.19.2=hac12032_0
+  - libcurl=7.71.1=h303737a_2
+  - libdeflate=1.0=h14c3975_1
+  - libedit=3.1.20210910=h7f8727e_0
+  - libffi=3.3=he6710b0_2
+  - libgcc-ng=11.2.0=h1234567_1
+  - libgomp=11.2.0=h1234567_1
+  - libssh2=1.10.0=h8f2d780_0
+  - libstdcxx-ng=11.2.0=h1234567_1
+  - manta=1.6.0=h9ee0642_2
+  - ncurses=6.3=h7f8727e_2
+  - openssl=1.1.1o=h7f8727e_0
+  - pip=19.3.1=py27_0
+  - python=2.7.18=ha1903f6_2
+  - readline=8.1.2=h7f8727e_1
+  - samtools=1.6=h9dace67_6
+  - setuptools=44.0.0=py27_0
+  - sqlite=3.38.3=hc218d9a_0
+  - tk=8.6.12=h1ccaba5_0
+  - wheel=0.37.1=pyhd3eb1b0_0
+  - xz=5.2.5=h7f8727e_1
+  - zlib=1.2.12=h7f8727e_2
+prefix: /home/cuong.pham/miniconda3/envs/manta

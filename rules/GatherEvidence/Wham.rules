@@ -1,0 +1,27 @@
+
+rule runWham_include_list:
+    input:
+        bam = get_bam_file,
+        ref = config['ref_38']['fasta']
+    output:
+        vcf = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/wham/{sample}.wham.vcf.gz',
+    conda: "../../envs/wham.yaml"
+    params:
+        include_list = config['wham']['include_list'],
+        pri_contig_list = config['base']['primary_contig_list']
+    threads: workflow.cores * 0.5
+    benchmark:
+            "benchmark/Wham/{sample}.wham.txt"
+    resources:
+        mem_mb=MEMORY_USAGE
+    shell:
+        """
+            scripts/RunWhamIncludeList.sh \\
+                {input.bam} \\
+                {input.ref} \\
+                {wildcards.sample} \\
+                {threads} \\
+                {params.include_list} \\
+                {params.pri_contig_list} \\
+                {output.vcf}
+        """

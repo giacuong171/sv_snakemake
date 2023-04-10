@@ -1,0 +1,239 @@
+num_of_sample=len(sample_names)
+
+
+rule AnnotateIntervals:
+    input:
+        interval = rules.CountsToIntervals.output,
+        ref = config['ref_38']['fasta']
+    output:
+        config['base']['results_dir'] + "/GatherSampleEvidence/CondenseCounts/condensed_intervals.annotated.tsv"
+    params:
+        mem=JV_MEM,
+    threads: GATK_thread
+    singularity: "sif_images/gatk_latest.sif"
+    shell:
+        """
+            gatk --java-options "{params.mem}" AnnotateIntervals \\
+            -L {input.interval} \\
+            --reference {input.ref} \\
+            --interval-merging-rule OVERLAPPING_ONLY \\
+            --output {output}
+        """
+
+
+rule FilterIntervalsForPloidy:
+    input:
+        interval = rules.CountsToIntervals.output,
+        annotated_intervals = rules.AnnotateIntervals.output,
+        tsv = expand(rules.CondenseReadCounts.output, sample=sample_names)
+    output:
+        config['base']['results_dir'] + "/GatherSampleEvidence/CondenseCounts/condensed_intervals.filtered.interval_list"
+    threads: GATK_thread
+    params:
+        exclude_interval= config['ref_38']['exclude_intervals_cnv'],
+        mem=JV_MEM,
+    singularity: "sif_images/gatk_latest.sif"
+    shell:
+        """
+        a=""
+        for i in {input.tsv}; do a=$a" -I "$i; done
+        gatk --java-options "{params.mem}" \\
+        FilterIntervals -L {input.interval} \\
+        -XL {params.exclude_interval} \\
+        --annotated-intervals {input.annotated_intervals} \\
+        $a \\
+        --minimum-gc-content 0.1 --maximum-gc-content 0.9 \\
+        --minimum-mappability 0.9 --maximum-mappability 1.0 \\
+        --minimum-segmental-duplication-content 0.0 --maximum-segmental-duplication-content 0.5 \\
+        --low-count-filter-count-threshold 5 --low-count-filter-percentage-of-samples 90.0 \\
+        --extreme-count-filter-minimum-percentile 1.0 --extreme-count-filter-maximum-percentile 99.0 \\
+        --extreme-count-filter-percentage-of-samples 90.0 --interval-merging-rule OVERLAPPING_ONLY \\
+        --output {output}
+        """
+
+#gatk DetermineGermlineContigPloidy isnt able to execute in conda. Need a fix. ERROR: No module name gcnvkernel
+
+rule DetermineGermlineContigPloidyCohortMode:
+    input:
+        interval_ploidy = rules.FilterIntervalsForPloidy.output,
+        tsv = expand(rules.CondenseReadCounts.output, sample=sample_names)
+    params:
+        contig_prior=config['ref_38']['contig_ploidy_priors'],
+        op_dir = OUTPUT_DIR + "/GatherSampleEvidence/TrainGCNV",
+        batch = config['base']['batch'],
+        docker_img = "broadinstitute/gatk:latest",
+        mem=JV_MEM,
+    benchmark:
+        "benchmark/TraingCNV/DetermineGermlineContig.tsv"
+    log:
+        "logs/DetermineGermlineContig.log"
+    threads: GATK_thread
+    resources:
+        mem_mb= MEMORY_USAGE
+    singularity: "sif_images/gatk_latest.sif"
+    output:
+        contig_ploidy_model=OUTPUT_DIR + "/GatherSampleEvidence/TrainGCNV/" + config['base']['batch'] + "-model-contig-ploidy-model.tar.gz",
+        contig_ploidy_call=OUTPUT_DIR + "/GatherSampleEvidence/TrainGCNV/" + config['base']['batch'] + "-calls-contig-ploidy-model.tar.gz",
+    shell:
+        """
+            a=""
+            for i in {input.tsv}; do a=$a" -I "$i; done
+            gatk --java-options "{params.mem}" \\
+            DetermineGermlineContigPloidy \\
+            -L {input.interval_ploidy} \\
+            $a \\
+            --contig-ploidy-priors {params.contig_prior} \\
+            --interval-merging-rule OVERLAPPING_ONLY \\
+            --output {params.op_dir} \\
+            --output-prefix {params.batch} \\
+            --verbosity DEBUG \\
+            --mean-bias-standard-deviation 0.01 \\
+            --mapping-error-rate 0.01 \\
+            --global-psi-scale 0.001 \\
+            --sample-psi-scale 0.0001
+
+            cd {params.op_dir}
+            tar -czf {output.contig_ploidy_model} {params.batch}-model/
+            rm -rf {params.batch}-model/
+            tar -czf {output.contig_ploidy_call} {params.batch}-calls/
+            rm -rf {params.batch}-calls/
+        """
+
+intervals=range(config['TrainGCNV']["NUMBER_INTERVALS"])
+SCATTER=[]
+for i in intervals:
+    SCATTER.append("temp_000"+str(i+1)+"_of_"+str(config['TrainGCNV']["NUMBER_INTERVALS"]))
+
+rule ScatterIntervals:
+    input:
+        rules.FilterIntervalsForPloidy.output
+    output:
+        expand(config['base']['results_dir']+"/GatherSampleEvidence/TrainGCNV/scatter/{fragment}/scattered.interval_list", fragment=SCATTER)
+    params:
+        dir = directory(config['base']['results_dir']+"/GatherSampleEvidence/TrainGCNV/scatter"),
+        scatter_count=config['TrainGCNV']['NUMBER_INTERVALS'],
+        mem=JV_MEM
+    threads: GATK_thread
+    conda: "../../envs/gatk.yaml"
+    shell:
+        """
+            gatk --java-options "{params.mem}" IntervalListTools \\
+                --INPUT {input} \\
+                --SUBDIVISION_MODE BALANCING_WITHOUT_INTERVAL_SUBDIVISION \\
+                --SCATTER_COUNT {params.scatter_count} \\
+                --OUTPUT {params.dir}
+        """
+
+#need to add option for limit the cpu usage of docker
+rule GermlineCNVCallerCohortMode:
+    input:
+        interval = OUTPUT_DIR+"/GatherSampleEvidence/TrainGCNV/scatter/{fragment}/scattered.interval_list",
+        ploidy_calls = rules.DetermineGermlineContigPloidyCohortMode.output.contig_ploidy_call,
+        anno = rules.AnnotateIntervals.output,
+        tsv = expand(rules.CondenseReadCounts.output, sample=sample_names),
+    output:
+        call = directory(config['base']['results_dir']+"/GatherSampleEvidence/TrainGCNV/cohort_germline_calling/{fragment}-calls")
+    benchmark:
+        "benchmark/TraingCNV/GermlineCNVCallerCohortMode.{fragment}.tsv"
+    threads: GATK_thread
+    resources:
+        mem_mb=MEMORY_USAGE
+    params:
+        prefix="{fragment}",
+        mem=JV_MEM,
+        dir=OUTPUT_DIR+"/GatherSampleEvidence/TrainGCNV/cohort_germline_calling",
+        calls_dir= OUTPUT_DIR+"/GatherSampleEvidence/TrainGCNV",
+        batch = config['base']['batch']
+    singularity: "sif_images/gatk_latest.sif"
+    shell:
+        """
+        tar -xzf {input.ploidy_calls} -C {params.calls_dir}
+        ploidy_calls={params.calls_dir}/{params.batch}-calls
+        a=""
+        for i in {input.tsv}; do a=$a" -I "$i; done
+        gatk --java-options "{params.mem}" GermlineCNVCaller \\
+            --run-mode COHORT \\
+            --annotated-intervals {input.anno} \\
+            --interval-merging-rule OVERLAPPING_ONLY \\
+            -L {input.interval} \\
+            $a \\
+            --contig-ploidy-calls $ploidy_calls \\
+            --output {params.dir} \\
+            --output-prefix {params.prefix} \\
+            --verbosity DEBUG
+        """
+
+def index(sample,scatter):
+    for i in glob.glob(config['base']['results_dir']+"/GatherSampleEvidence/TrainGCNV/cohort_germline_calling/"+scatter[0]+"-calls/SAMPLE_*/sample_name.txt"):
+        file=open(i,'r')
+        for line in file:
+           if line.rstrip() == sample: 
+               return i.split('/')[-2].split('_')[1]
+
+rule PostProcess:
+    input:
+        tsv = rules.CondenseReadCounts.output,
+        calls=expand(rules.GermlineCNVCallerCohortMode.output, fragment = SCATTER),
+        ploidy_calls = rules.DetermineGermlineContigPloidyCohortMode.output.contig_ploidy_call,
+    output:
+        interval = OUTPUT_DIR+"/GatherSampleEvidence/TrainGCNV/VCF/{sample}.intervals.vcf.gz",
+        seg = OUTPUT_DIR+"/GatherSampleEvidence/TrainGCNV/VCF/{sample}.segments.vcf.gz",
+        den = OUTPUT_DIR+"/GatherSampleEvidence/TrainGCNV/VCF/{sample}.denoise"
+    params:
+        id = lambda wildcards: index(wildcards.sample, SCATTER),
+        mem=JV_MEM,
+        modelfiles = lambda wildcards, input: " --model-shard-path ".join([x.replace('-calls','-model') for x in input.calls]),
+        callsfiles = lambda wildcards, input: " --calls-shard-path ".join(input.calls),
+        dir=OUTPUT_DIR+"/GatherSampleEvidence/TrainGCNV/cohort_germline_calling",
+        calls_dir= OUTPUT_DIR+"/GatherSampleEvidence/TrainGCNV",
+        batch = config['base']['batch']
+    threads: GATK_thread
+    resources:
+        mem_mb=MEMORY_USAGE
+    singularity: "sif_images/gatk_latest.sif"
+    shell:
+        """
+        ploidy_calls={params.calls_dir}/{params.batch}-calls
+
+        gatk --java-options "{params.mem}" \\
+        PostprocessGermlineCNVCalls \\
+        --model-shard-path {params.modelfiles} \\
+        --calls-shard-path {params.callsfiles} \\
+        --allosomal-contig chrX --allosomal-contig chrY \\
+        --autosomal-ref-copy-number 2 \\
+        --contig-ploidy-calls $ploidy_calls \\
+        --sample-index {params.id} \\
+        --output-genotyped-intervals {output.interval} \\
+        --output-genotyped-segments {output.seg} \\
+        --output-denoised-copy-ratios {output.den} 
+        """
+
+rule ExplodePloidyCalls:
+    input:
+        pp = expand(rules.PostProcess.output,sample=sample_names),
+        call_dir=rules.DetermineGermlineContigPloidyCohortMode.output.contig_ploidy_call,
+    output:
+        expand(OUTPUT_DIR + "/GatherSampleEvidence/TrainGCNV/" + BATCH + "-calls/{sample}.contig_ploidy_calls.tar.gz",sample=sample_names)
+    params:
+        sp=sample_names,
+        NO_sp=num_of_sample,
+        calls_dir= OUTPUT_DIR+"/GatherSampleEvidence/TrainGCNV",
+        batch = BATCH
+    shell:
+        """
+            tar -xzf {input.call_dir} -C {params.calls_dir}
+            ploidy_calls={params.calls_dir}/{params.batch}-calls
+            
+            cd $ploidy_calls
+            for file in ./*
+            do
+                if [[ -d $file ]]
+                then
+                    sp_name=$(cat $file/sample_name.txt)
+                    cd $file
+                    tar -czf ../$sp_name.contig_ploidy_calls.tar.gz *
+                    cd ..
+                    rm -rf $file
+                fi
+            done
+        """

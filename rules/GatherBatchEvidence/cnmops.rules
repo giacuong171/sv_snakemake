@@ -1,0 +1,424 @@
+#run cnmops in allosome on Male (X,Y) on r1 and r2
+#run cnmops in allosome on Female (X)
+#run cnmops in autosome
+#should rewrite this script
+
+
+
+####################################AUTOSOMAL_CNMOPS##########################
+rule cnmops_AUTOSOMAL_extract:
+    input:
+        bincov = rules.ZPaste.output.matrix_file,
+    output:
+        OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/matrix/{chr}.RD.txt"
+    params:
+        ref_dict="resource/Homo_sapiens_assembly38.dict",
+        mem=JV_MEM
+    resources:
+        mem_mb=MEMORY_USAGE
+    conda:
+        "../../envs/gatk.yaml"
+    threads: 6
+    shell:
+        """
+            gatk --java-options "{params.mem}" \\
+                PrintSVEvidence \\
+                --sequence-dictionary {params.ref_dict} \\
+                --evidence-file {input.bincov} \\
+                -L {wildcards.chr} \\
+                -O {output}
+        """
+
+rule cnmops_autosome_rsmall:
+    input:
+        bincov = rules.ZPaste.output.matrix_file,
+        extract = rules.cnmops_AUTOSOMAL_extract.output,
+    params:
+        exclude="resource/GatherBatchEvidence/GRCh38_Nmask.bed",
+        r1="3",
+        r2="10",
+        op_dir_1=OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/{chr}/r1small",
+        op_dir_2=OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/{chr}/r2small"
+    resources:
+        tmpdir="./tmp"
+    conda: 
+        "../../envs/cnmops.yaml"
+    threads: 6
+    wildcard_constraints: chr="chr[1-9]|chr[1-9][0-9]"
+    output:
+        r1 = OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/{chr}/r1small/calls/cnMOPS.cnMOPS.gff",
+        r2 = OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/{chr}/r2small/calls/cnMOPS.cnMOPS.gff"
+    shell:
+        """
+            bash scripts/cnmops_allo.sh {input.extract} \\
+                {input.bincov} {params.exclude} \\
+                {params.r1} \\
+                r1_small \\
+                {wildcards.chr} \\
+                {params.op_dir_1} \\
+                {output.r1}
+
+            bash scripts/cnmops_allo.sh {input.extract} \\
+                {input.bincov} {params.exclude} \\
+                {params.r2} \\
+                r2_small \\
+                {wildcards.chr} \\
+                {params.op_dir_2} \\
+                {output.r2}
+            
+            rm ./tmp/cnmops.{wildcards.chr}.r1_small.out \\
+                ./tmp/cnmops.{wildcards.chr}.r2_small.out
+        """
+
+#add try on runcnMOPS.R
+rule cnmops_autosome_rlarge:
+    input:
+        extract = rules.cnmops_AUTOSOMAL_extract.output,
+        bincov = rules.ZPaste.output.matrix_file,
+    params:
+        exclude="resource/GatherBatchEvidence/GRCh38_Nmask.bed",
+        r1="1000",
+        r2="100",
+        op_dir_1=OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/{chr}/r1large",
+        op_dir_2=OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/{chr}/r2large"
+    resources:
+        tmpdir="./tmp"
+    threads: 6
+    wildcard_constraints: chr="chr[1-9]|chr[1-9][0-9]"
+    conda: 
+        "../../envs/cnmops.yaml"
+    output:
+        r1 = OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/{chr}/r1large/calls/cnMOPS.cnMOPS.gff",
+        r2 = OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/{chr}/r2large/calls/cnMOPS.cnMOPS.gff"
+    shell:
+        """
+            bash scripts/cnmops_allo.sh {input.extract} \\
+                {input.bincov} {params.exclude} \\
+                {params.r1} \\
+                r1_large \\
+                {wildcards.chr} \\
+                {params.op_dir_1} \\
+                {output.r1}
+
+            bash scripts/cnmops_allo.sh {input.extract} \\
+                {input.bincov} {params.exclude} \\
+                {params.r2} \\
+                r2_large \\
+                {wildcards.chr} \\
+                {params.op_dir_2} \\
+                {output.r2}
+            
+             rm ./tmp/cnmops.{wildcards.chr}.r1_large.out \\
+                ./tmp/cnmops.{wildcards.chr}.r2_large.out
+        """
+#####################################MALE_CNMOPS##############################
+rule cnmops_MALE_extract:
+    input:
+        bincov = rules.ZPaste.output.matrix_file,
+    output:
+        OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/matrix/MALE/{chr}.RD.txt"
+    params:
+        ref_dict="resource/Homo_sapiens_assembly38.dict",
+        mem=JV_MEM
+    resources:
+        mem_mb=MEMORY_USAGE
+    conda:
+        "../../envs/gatk.yaml"
+    threads: 6
+    shell:
+        """
+            gatk --java-options "{params.mem}" \\
+                PrintSVEvidence \\
+                --sequence-dictionary {params.ref_dict} \\
+                --evidence-file {input.bincov} \\
+                -L {wildcards.chr} \\
+                -O {output}
+        """
+
+rule cnmops_allosome_rsmall_Male:
+    input:
+        chr_mt = rules.cnmops_MALE_extract.output,
+        bincov = rules.ZPaste.output.matrix_file,
+    output:
+        r1 = OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/male/{chr}/r1small/calls/cnMOPS.cnMOPS.gff",
+        r2 = OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/male/{chr}/r2small/calls/cnMOPS.cnMOPS.gff",
+    params:
+        exclude="resource/GatherBatchEvidence/GRCh38_Nmask.bed",
+        r1="3",
+        r2="10",
+        op_dir_1=OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/male/{chr}/r1small",
+        op_dir_2=OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/male/{chr}/r2small",
+        gender_file=config['base']['gender_file']
+    resources:
+        tmpdir="./tmp"
+    threads: 6
+    conda: 
+        "../../envs/cnmops.yaml"
+    shell:
+        """
+            python scripts/cnmops_auto_RD.py --mode 1 \\
+                    --gender_file {params.gender_file} \\
+                    --chr_mat {input.chr_mt} \\
+                    --output ./tmp/{wildcards.chr}.1.RD.txt
+
+            bash scripts/cnmops_allo.sh ./tmp/{wildcards.chr}.1.RD.txt \\
+                {input.bincov} {params.exclude} \\
+                {params.r1} \\
+                r1_small \\
+                {wildcards.chr} \\
+                {params.op_dir_1} \\
+                {output.r1}
+
+            bash scripts/cnmops_allo.sh ./tmp/{wildcards.chr}.1.RD.txt \\
+                {input.bincov} {params.exclude} \\
+                {params.r2} \\
+                r2_small \\
+                {wildcards.chr} \\
+                {params.op_dir_2} \\
+                {output.r2}
+
+            rm ./tmp/cnmops.{wildcards.chr}.r1_small.out \\
+                ./tmp/cnmops.{wildcards.chr}.r2_small.out \\
+                ./tmp/{wildcards.chr}.1.RD.txt
+        """
+    
+rule cnmops_allosome_rlarge_Male:
+    input:
+        chr_mt= rules.cnmops_MALE_extract.output,
+        bincov = rules.ZPaste.output.matrix_file,
+    output:
+        r1 = OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/male/{chr}/r1large/calls/cnMOPS.cnMOPS.gff",
+        r2 = OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/male/{chr}/r2large/calls/cnMOPS.cnMOPS.gff",
+    params:
+        exclude="resource/GatherBatchEvidence/GRCh38_Nmask.bed",
+        r1="1000",
+        r2="100",
+        op_dir_1=OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/male/{chr}/r1large",
+        op_dir_2=OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/male/{chr}/r2large",
+        gender_file=config['base']['gender_file']
+    resources:
+        tmpdir="./tmp"
+    threads: 6
+    conda: 
+        "../../envs/cnmops.yaml"
+    shell:
+        """
+            python scripts/cnmops_auto_RD.py --mode 1 \\
+                    --gender_file {params.gender_file} \\
+                    --chr_mat {input.chr_mt} \\
+                    --output ./tmp/{wildcards.chr}.1.RD.txt
+
+            bash scripts/cnmops_allo.sh ./tmp/{wildcards.chr}.1.RD.txt \\
+                {input.bincov} {params.exclude} \\
+                {params.r1} \\
+                r1_large \\
+                {wildcards.chr} \\
+                {params.op_dir_1} \\
+                {output.r1}
+
+            bash scripts/cnmops_allo.sh ./tmp/{wildcards.chr}.1.RD.txt \\
+                {input.bincov} {params.exclude} \\
+                {params.r2} \\
+                r2_large \\
+                {wildcards.chr} \\
+                {params.op_dir_2} \\
+                {output.r2}
+            
+            rm ./tmp/cnmops.{wildcards.chr}.r1_large.out \\
+                ./tmp/cnmops.{wildcards.chr}.r2_large.out \\
+                ./tmp/{wildcards.chr}.1.RD.txt
+        """
+
+##################################FEMALE_CNMOPS###############################
+rule cnmops_FEMALE_extract:
+    input:
+        bincov = rules.ZPaste.output.matrix_file,
+    output:
+        OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/matrix/FEMALE/{chr}.RD.txt"
+    params:
+        ref_dict="resource/Homo_sapiens_assembly38.dict",
+        mem=JV_MEM
+    resources:
+        mem_mb=MEMORY_USAGE
+    conda:
+        "../../envs/gatk.yaml"
+    threads: 6
+    shell:
+        """
+            gatk --java-options "{params.mem}" \\
+                PrintSVEvidence \\
+                --sequence-dictionary {params.ref_dict} \\
+                --evidence-file {input.bincov} \\
+                -L {wildcards.chr} \\
+                -O {output}
+        """
+
+rule cnmops_allosome_rsmall_Female:
+    input:
+        chr_mt=rules.cnmops_FEMALE_extract.output,
+        bincov = rules.ZPaste.output.matrix_file,
+    output:
+        r1 = OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/female/{chr}/r1small/calls/cnMOPS.cnMOPS.gff",
+        r2 = OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/female/{chr}/r2small/calls/cnMOPS.cnMOPS.gff",
+    params:
+        exclude="resource/GatherBatchEvidence/GRCh38_Nmask.bed",
+        r1="3",
+        r2="10",
+        op_dir_1=OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/female/{chr}/r1small",
+        op_dir_2=OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/female/{chr}/r2small",
+        gender_file=config['base']['gender_file']
+    resources:
+        tmpdir="./tmp"
+    threads: 6
+    conda: 
+        "../../envs/cnmops.yaml"
+    shell:
+        """
+            python scripts/cnmops_auto_RD.py --mode 2 \\
+                    --gender_file {params.gender_file} \\
+                    --chr_mat {input.chr_mt} \\
+                    --output ./tmp/{wildcards.chr}.2.RD.txt
+
+            bash scripts/cnmops_allo.sh ./tmp/{wildcards.chr}.2.RD.txt \\
+                {input.bincov} {params.exclude} \\
+                {params.r1} \\
+                r1_small \\
+                {wildcards.chr} \\
+                {params.op_dir_1} \\
+                {output.r1}
+
+            bash scripts/cnmops_allo.sh ./tmp/{wildcards.chr}.2.RD.txt \\
+                {input.bincov} {params.exclude} \\
+                {params.r2} \\
+                r2_small \\
+                {wildcards.chr} \\
+                {params.op_dir_2} \\
+                {output.r2}
+            
+        """
+
+rule cnmops_allosome_rlarge_Female:
+    input:
+        chr_mt = rules.cnmops_FEMALE_extract.output,
+        bincov = rules.ZPaste.output.matrix_file,
+    output:
+        r1 = OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/female/{chr}/r1large/calls/cnMOPS.cnMOPS.gff",
+        r2 = OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/female/{chr}/r2large/calls/cnMOPS.cnMOPS.gff",
+    params:
+        exclude="resource/GatherBatchEvidence/GRCh38_Nmask.bed",
+        r1="1000",
+        r2="100",
+        op_dir_1=OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/female/{chr}/r1large",
+        op_dir_2=OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/results/female/{chr}/r2large",
+        gender_file=config['base']['gender_file']
+    resources:
+        tmpdir="./tmp"
+    threads: 6
+    conda: 
+        "../../envs/cnmops.yaml"
+    shell:
+        """
+            python scripts/cnmops_auto_RD.py --mode 2 \\
+                    --gender_file {params.gender_file} \\
+                    --chr_mat {input.chr_mt} \\
+                    --output ./tmp/{wildcards.chr}.2.RD.txt
+
+            bash scripts/cnmops_allo.sh ./tmp/{wildcards.chr}.2.RD.txt \\
+                {input.bincov} {params.exclude} \\
+                {params.r1} \\
+                r1_large \\
+                {wildcards.chr} \\
+                {params.op_dir_1} \\
+                {output.r1}
+
+            bash scripts/cnmops_allo.sh ./tmp/{wildcards.chr}.2.RD.txt \\
+                {input.bincov} {params.exclude} \\
+                {params.r2} \\
+                r2_large \\
+                {wildcards.chr} \\
+                {params.op_dir_2} \\
+                {output.r2}
+            
+        """
+
+##################################CLEAN_CNMOPS################################
+rule CleanCNMops_rsmall:
+    input:
+        AT_r1s=expand(rules.cnmops_autosome_rsmall.output.r1,chr=AUTOSOMAL),
+        AT_r2s=expand(rules.cnmops_autosome_rsmall.output.r2,chr=AUTOSOMAL),
+        M_r1s =expand(rules.cnmops_allosome_rsmall_Male.output.r1,chr=MALE),
+        M_r2s =expand(rules.cnmops_allosome_rsmall_Male.output.r2,chr=MALE),
+        F_r1s =expand(rules.cnmops_allosome_rsmall_Female.output.r1,chr=FEMALE),
+        F_r2s =expand(rules.cnmops_allosome_rsmall_Female.output.r2,chr=FEMALE),
+        
+    output:
+        Del= OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/rsmall/" + BATCH + ".DEL.small.bed",
+        Dup= OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/rsmall/" + BATCH + ".DUP.small.bed",
+    params:
+        sample_list=config['base']['sample_list'],
+        op_dir = OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/rsmall",
+        exclude = "resource/GatherBatchEvidence/GRCh38_Nmask.bed",
+        batch = config['base']['batch'],
+        chrom_file="resource/GatherBatchEvidence/autosome.fai",
+        allo_file="resource/GatherBatchEvidence/allosome.fai"
+    resources:
+        tmpdir="./tmp"
+    shell:
+        """
+            if [ ! -d {params.op_dir} ]; then
+                mkdir {params.op_dir}
+            fi
+            cat {input.AT_r1s} {input.AT_r2s} {input.M_r1s} {input.M_r2s} {input.F_r1s} {input.F_r2s} > ./tmp/cnmops.small.gff 
+            bash scripts/CleanCNMops.sh ./tmp/cnmops.small.gff \\
+                                        {params.op_dir} \\
+                                        {params.exclude} \\
+                                        {params.sample_list} \\
+                                        {params.batch} \\
+                                        small \\
+                                        {params.chrom_file} \\
+                                        {params.allo_file}
+
+            touch {output.Del}
+            touch {output.Dup}
+        """
+
+rule CleanCNMops_rlarge:
+    input:
+        AT_r1l=expand(rules.cnmops_autosome_rlarge.output.r1,chr=AUTOSOMAL),
+        AT_r2l=expand(rules.cnmops_autosome_rlarge.output.r2,chr=AUTOSOMAL),
+        M_r1l =expand(rules.cnmops_allosome_rlarge_Male.output.r1,chr=MALE),
+        M_r2l =expand(rules.cnmops_allosome_rlarge_Male.output.r2,chr=MALE),
+        F_r1l =expand(rules.cnmops_allosome_rlarge_Female.output.r1,chr=FEMALE),
+        F_r2l =expand(rules.cnmops_allosome_rlarge_Female.output.r2,chr=FEMALE),
+    output:
+        Del= OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/rlarge/" + BATCH + ".DEL.large.bed",
+        Dup= OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/rlarge/" + BATCH + ".DUP.large.bed",
+    params:
+        sample_list=config['base']['sample_list'],
+        op_dir = OUTPUT_DIR + "/GatherBatchEvidence/CNMOPs/rlarge",
+        exclude = "resource/GatherBatchEvidence/GRCh38_Nmask.bed",
+        batch = config['base']['batch'],
+        chrom_file="resource/GatherBatchEvidence/autosome.fai",
+        allo_file="resource/GatherBatchEvidence/allosome.fai",
+        min_size=10000 #need to add to configfile
+    resources:
+        tmpdir="./tmp"
+    shell:
+        """
+        if [ ! -d {params.op_dir} ]; then
+            mkdir {params.op_dir}
+        fi
+        cat {input.AT_r1l} {input.AT_r2l} {input.M_r1l} {input.M_r2l} {input.F_r1l} {input.F_r2l} > ./tmp/cnmops.large.gff 
+        bash scripts/CleanCNMops.sh ./tmp/cnmops.large.gff \\
+                                    {params.op_dir} \\
+                                    {params.exclude} \\
+                                    {params.sample_list} \\
+                                    {params.batch} \\
+                                    large \\
+                                    {params.chrom_file} \\
+                                    {params.allo_file} \\
+                                    {params.min_size}
+        
+        touch {output.Del}
+        touch {output.Dup}
+        """

@@ -1,0 +1,121 @@
+#It occurences a bug while running GATK PrintSVEvidence.
+
+rule filterbed:
+    input:
+        OUTPUT_DIR + "/GenerateBatchMetrics/All_VCFs/" + BATCH + ".{source}.vcf.gz",
+    output:
+        test = temp(OUTPUT_DIR + "/GenerateBatchMetrics/SRtest/test.{source}.bed"),
+        unsort = temp(OUTPUT_DIR + "/GenerateBatchMetrics/SRtest/region.{source}.bed"),
+        sort = temp(OUTPUT_DIR + "/GenerateBatchMetrics/SRtest/region.sort.{source}.bed"),
+        merged = OUTPUT_DIR + "/GenerateBatchMetrics/SRtest/region.merged.{source}.bed"
+
+    conda:
+        "../../envs/genomeAD.yaml"
+    shell:
+        """
+        set -euo pipefail
+        svtk vcf2bed --split-bnd --no-header {input} {output.test}
+        awk -v OFS="\\t" '{{if ($2-250>0){{print $1,$2-250,$2+250}}else{{print $1,0,$2+250}}}}' {output.test}  >> {output.unsort}
+        awk -v OFS="\\t" '{{if ($3-250>0){{print $1,$3-250,$3+250}}else{{print $1,0,$3+250}}}}' {output.test}  >> {output.unsort}
+        sort -k1,1 -k2,2n {output.unsort} > {output.sort}
+        bedtools merge -d 16384 -i {output.sort} > {output.merged}
+        """
+
+rule extsr:
+    input:
+        bed = rules.filterbed.output.merged,
+        sr = OUTPUT_DIR + '/GatherBatchEvidence/MergeEvidence/' + BATCH + '.sr.txt.gz',
+    output:
+        local =OUTPUT_DIR + '/GenerateBatchMetrics/SRtest/Metrics/' + BATCH + '.{source}.txt.gz',
+    conda:
+        "../../envs/gatk.yaml"
+    params:
+        dict = "resource/Homo_sapiens_assembly38.dict",
+        mem= JV_MEM,
+        batch=BATCH,
+    threads: 6
+    shell:
+        """
+        gatk --java-options "{params.mem}" PrintSVEvidence \\
+            --sequence-dictionary {params.dict} \\
+            --evidence-file {input.sr} \\
+            -L {input.bed} \\
+            -O {output.local}
+        tabix -s1 -b2 -e2 {output.local}
+        """
+###########################################################################
+
+rule SRtest_autosome:
+    input:
+        medmat = rules.T_CalcMedCov.output,
+        sr = OUTPUT_DIR + '/GatherBatchEvidence/MergeEvidence/' + BATCH + '.sr.txt.gz',
+        vcf = OUTPUT_DIR + "/ClusterBatch/{source}/" + BATCH + ".{source}.{chrom}.ex.svtk.vcf.gz",
+    output: 
+        OUTPUT_DIR + "/GenerateBatchMetrics/SRtest/" + BATCH + ".{source}.{chrom}.stat"
+    params:
+        sample = OUTPUT_DIR + "/sample_list.txt",
+    conda:
+        "../../envs/genomeAD.yaml"
+    wildcard_constraints:
+        chrom='(' + '|'.join(AUTOSOMAL) + ')'
+    threads: workflow.cores * 0.2
+    shell:
+        """
+        svtk sr-test -w 50 --common \\
+            --medianfile {input.medmat} \\
+            --samples {params.sample} \\
+            {input.vcf} \\
+            {input.sr} stdout > {output}
+        """
+
+rule SRtest_allosomes:
+    input:
+        medmat = rules.T_CalcMedCov.output,
+        sr = OUTPUT_DIR + '/GatherBatchEvidence/MergeEvidence/' + BATCH + '.sr.txt.gz',
+        vcf = OUTPUT_DIR + "/ClusterBatch/{source}/" + BATCH + ".{source}.{chrom}.ex.svtk.vcf.gz",
+        whitelist = rules.make_sex_whitelists.output,
+    output:
+        OUTPUT_DIR + "/GenerateBatchMetrics/SRtest/allosome/" + BATCH + ".{source}.{chrom}.{sex}.stat"        
+    wildcard_constraints:
+        chrom='(' + '|'.join(['chrX','chrY']) + ')'
+    conda: 
+        "../../envs/genomeAD.yaml"
+    threads: workflow.cores * 0.2
+    shell:
+         """
+         svtk sr-test -w 50 \\
+            --medianfile {input.medmat} \\
+            --samples {input.whitelist} \\
+            {input.vcf} {input.sr} stdout > {output}
+         """
+
+rule merge_sr_allosomes:
+    input:
+        males= OUTPUT_DIR + "/GenerateBatchMetrics/SRtest/allosome/" + BATCH + ".{source}.{chrom}.males.stat",
+        females = OUTPUT_DIR + "/GenerateBatchMetrics/SRtest/allosome/" + BATCH + ".{source}.{chrom}.females.stat"
+    output:
+        metrics = OUTPUT_DIR + "/GenerateBatchMetrics/SRtest/" + BATCH + ".{source}.{chrom}.stat"
+    wildcard_constraints:
+        chrom='(' + '|'.join(['chrX','chrY']) + ')'
+    run:
+        males = pd.read_table(input.males)
+        females = pd.read_table(input.females)
+        if males.shape[0] != females.shape[0]:
+            raise Exception('mismatched table sizes')
+        if wildcards.chrom == 'Y':
+            males.to_csv(output.metrics, sep='\t', index=False)
+        else:
+            male_only = females.log_pval.isnull()
+            females.loc[male_only] = males
+            females.to_csv(output.metrics, sep='\t', index=False, na_rep='NA')
+
+rule MergeStats_SR:
+    input:
+        expand(OUTPUT_DIR + "/GenerateBatchMetrics/SRtest/" + BATCH + ".{source}.{chrom}.stat", source = ['manta','wham'],chrom=CONTIG_LIST)
+    output:
+        OUTPUT_DIR + '/GenerateBatchMetrics/Results/' + BATCH + '.SR.stats'
+    shell:
+        """
+        head -n 1 {input[0]} > {output}
+        for f in {input}; do sed 1d $f >> {output}; done
+        """

@@ -1,0 +1,280 @@
+#NEED TO UPDATE VERSION OF GATK TO VERSION 4.2.6.1 to prevent bug of PrintSVEvidence
+##################################BAF##########################################
+rule BAF_QC:
+    input:
+        rules.GenerateBAF_fromGvcf.output
+    output:
+        tmp_regions = temp(OUTPUT_DIR + "/EvidenceQC/MatrixQC/regions.baf.bed"),
+        tmp_local = temp(OUTPUT_DIR + "/EvidenceQC/MatrixQC/local.baf.txt.gz"),
+        tmp_local_tabix = temp(OUTPUT_DIR + "/EvidenceQC/MatrixQC/local.baf.txt.gz.tbi"),
+        QC_stats = OUTPUT_DIR + "/EvidenceQC/MatrixQC/" + BATCH +".BAF.QC_stats.txt",
+        matrix = OUTPUT_DIR + "/EvidenceQC/MatrixQC/" + BATCH + ".BAF.QC_matrix.txt",
+    params:
+        distance = 1000000,
+        genome ="resource/hg38.genome" ,
+        ref_dict="resource/Homo_sapiens_assembly38.dict",
+        mem=JV_MEM,
+        contig_list = CONTIG_LIST,
+        batch = BATCH
+    resources:
+        mem_mb=MEMORY_USAGE
+    conda:
+        "../../envs/gatk.yaml"
+    shell:
+        """
+        fgrep -v "#" {params.genome} | awk -v distance={params.distance} -v OFS="\\t" '{{ print $1, $2-distance, $2 }}' > {output.tmp_regions}
+
+        if [ -s {output.tmp_regions} ]; then
+            gatk --java-options "{params.mem}" PrintSVEvidence \\
+            --sequence-dictionary {params.ref_dict} \\
+            --evidence-file {input} \\
+            -L {output.tmp_regions} \\
+            -O {output.tmp_local}
+        else
+            touch {output.tmp_local}
+            bgzip {output.tmp_local}
+        fi
+
+        tabix -f -s 1 -b 2 -e 2 {output.tmp_local}
+
+        src/sv-pipeline/00_preprocessing/misc_scripts/nonRD_matrix_QC.sh \\
+            -d {params.distance} \\
+            {output.tmp_local} \\
+            {params.genome} \\
+            {output.QC_stats}
+        cut -f1 {params.genome} > tmp/contig.baf.list
+        python src/sv-pipeline/00_preprocessing/misc_scripts/qcstat2matrix.py {output.QC_stats} {params.batch} BAF tmp/contig.baf.list
+        touch {output.matrix}
+        rm tmp/contig.baf.list
+        """
+
+############################BINCOV######################################
+rule RD_QC:
+    input:
+        rules.ZPaste.output.matrix_file
+    output:
+        tmp_regions = temp(OUTPUT_DIR + "/EvidenceQC/MatrixQC/regions.rd.bed"),
+        tmp_local = OUTPUT_DIR + "/EvidenceQC/MatrixQC/local.rd.txt.gz",
+        tmp_local_tabix = OUTPUT_DIR + "/EvidenceQC/MatrixQC/local.rd.txt.gz.tbi",
+        QC_stats = OUTPUT_DIR + "/EvidenceQC/MatrixQC/" + BATCH +".RD.QC_stats.txt",
+        matrix = OUTPUT_DIR + "/EvidenceQC/MatrixQC/" + BATCH + ".RD.QC_matrix.txt",
+    params:
+        distance = 1000000,
+        genome ="resource/hg38.genome" ,
+        ref_dict="resource/Homo_sapiens_assembly38.dict",
+        mem=JV_MEM,
+        contig_list = CONTIG_LIST,
+        batch = BATCH
+    resources:
+        mem_mb=MEMORY_USAGE
+    conda:
+        "../../envs/gatk.yaml"
+    shell:
+        """
+        fgrep -v "#" {params.genome} | awk -v distance={params.distance} -v OFS="\\t" '{{ print $1, $2-distance, $2 }}' > {output.tmp_regions}
+
+        if [ -s {output.tmp_regions} ]; then
+            gatk --java-options "{params.mem}" PrintSVEvidence \\
+            --sequence-dictionary {params.ref_dict} \\
+            --evidence-file {input} \\
+            -L {output.tmp_regions} \\
+            -O {output.tmp_local}
+        else
+            touch {output.tmp_local}
+            bgzip {output.tmp_local}
+        fi
+
+        tabix -f -p bed {output.tmp_local}
+
+        src/sv-pipeline/00_preprocessing/misc_scripts/RD_matrix_QC.sh \\
+            -d {params.distance} \\
+            {output.tmp_local} \\
+            {params.genome} \\
+            {output.QC_stats}
+        cut -f1 {params.genome} > tmp/contig.rd.list
+        python src/sv-pipeline/00_preprocessing/misc_scripts/qcstat2matrix.py {output.QC_stats} {params.batch} RD tmp/contig.rd.list
+        touch {output.matrix}
+        rm tmp/contig.rd.list
+        """
+############################PE_QC###############################33
+rule PE_QC:
+    input:
+        OUTPUT_DIR + '/GatherBatchEvidence/MergeEvidence/' + BATCH + '.pe.txt.gz',
+    output:
+        tmp_regions = temp(OUTPUT_DIR + "/EvidenceQC/MatrixQC/regions.pe.bed"),
+        tmp_local = temp(OUTPUT_DIR + "/EvidenceQC/MatrixQC/local.pe.txt.gz"),
+        tmp_local_tabix = temp(OUTPUT_DIR + "/EvidenceQC/MatrixQC/local.pe.txt.gz.tbi"),
+        QC_stats = OUTPUT_DIR + "/EvidenceQC/MatrixQC/" + BATCH +".PE.QC_stats.txt",
+        matrix = OUTPUT_DIR + "/EvidenceQC/MatrixQC/" + BATCH + ".PE.QC_matrix.txt",
+    params:
+        distance = 1000000,
+        genome ="resource/hg38.genome" ,
+        ref_dict="resource/Homo_sapiens_assembly38.dict",
+        mem=JV_MEM,
+        contig_list = CONTIG_LIST,
+        batch = BATCH
+    resources:
+        mem_mb=MEMORY_USAGE
+    singularity: "sif_images/gatk-nightly_latest.sif"
+    shell:
+        """
+        fgrep -v "#" {params.genome} | awk -v distance={params.distance} -v OFS="\\t" '{{ print $1, $2-distance, $2 }}' > {output.tmp_regions}
+
+        if [ -s {output.tmp_regions} ]; then
+            gatk --java-options "{params.mem}" PrintSVEvidence \\
+            --sequence-dictionary {params.ref_dict} \\
+            --evidence-file {input} \\
+            -L {output.tmp_regions} \\
+            -O {output.tmp_local}
+        else
+            touch {output.tmp_local}
+            bgzip {output.tmp_local}
+        fi
+
+        tabix -f -s 1 -b 2 -e 2 {output.tmp_local}
+
+        src/sv-pipeline/00_preprocessing/misc_scripts/nonRD_matrix_QC.sh \\
+            -d {params.distance} \\
+            {output.tmp_local} \\
+            {params.genome} \\
+            {output.QC_stats}
+        cut -f1 {params.genome} > tmp/contig.PE.list
+        python src/sv-pipeline/00_preprocessing/misc_scripts/qcstat2matrix.py {output.QC_stats} {params.batch} PE tmp/contig.PE.list
+        touch {output.matrix}
+        rm tmp/contig.PE.list
+        """
+############################SR_QC#################################
+rule SR_QC:
+    input:
+        OUTPUT_DIR + '/GatherBatchEvidence/MergeEvidence/' + BATCH + '.sr.txt.gz',
+    output:
+        tmp_regions = temp(OUTPUT_DIR + "/EvidenceQC/MatrixQC/regions.sr.bed"),
+        tmp_local = temp(OUTPUT_DIR + "/EvidenceQC/MatrixQC/local.sr.txt.gz"),
+        tmp_local_tabix = temp(OUTPUT_DIR + "/EvidenceQC/MatrixQC/local.sr.txt.gz.tbi"),
+        QC_stats = OUTPUT_DIR + "/EvidenceQC/MatrixQC/" + BATCH +".SR.QC_stats.txt",
+        matrix = OUTPUT_DIR + "/EvidenceQC/MatrixQC/" + BATCH + ".SR.QC_matrix.txt",
+    params:
+        distance = 1000000,
+        genome ="resource/hg38.genome" ,
+        ref_dict="resource/Homo_sapiens_assembly38.dict",
+        mem=JV_MEM,
+        contig_list = CONTIG_LIST,
+        batch = BATCH
+    resources:
+        mem_mb=MEMORY_USAGE
+    singularity: "sif_images/gatk-nightly_latest.sif"
+    shell:
+        """
+        fgrep -v "#" {params.genome} | awk -v distance={params.distance} -v OFS="\\t" '{{ print $1, $2-distance, $2 }}' > {output.tmp_regions}
+
+        if [ -s {output.tmp_regions} ]; then
+            gatk --java-options "{params.mem}" PrintSVEvidence \\
+            --sequence-dictionary {params.ref_dict} \\
+            --evidence-file {input} \\
+            -L {output.tmp_regions} \\
+            -O {output.tmp_local}
+        else
+            touch {output.tmp_local}
+            bgzip {output.tmp_local}
+        fi
+
+        tabix -f -s 1 -b 2 -e 2 {output.tmp_local}
+
+        src/sv-pipeline/00_preprocessing/misc_scripts/nonRD_matrix_QC.sh \\
+            -d {params.distance} \\
+            {output.tmp_local} \\
+            {params.genome} \\
+            {output.QC_stats}
+        cut -f1 {params.genome} > tmp/contig.sr.list
+        python src/sv-pipeline/00_preprocessing/misc_scripts/qcstat2matrix.py {output.QC_stats} {params.batch} SR tmp/contig.sr.list
+        touch {output.matrix}
+        rm tmp/contig.sr.list
+        """
+#########################UPDATE########################################
+rule link_evidence:
+    input:
+        baf = rules.GenerateBAF_fromGvcf.output,
+        rd = rules.ZPaste.output.matrix_file
+    output:
+        baf = OUTPUT_DIR + '/GatherBatchEvidence/MergeEvidence/' + BATCH + '.baf.txt.gz',
+        rd = OUTPUT_DIR + '/GatherBatchEvidence/MergeEvidence/' + BATCH + '.rd.txt.gz',
+    shell:
+        """
+        ln -s {input.baf} {output.baf}
+        ln -s {input.rd} {output.rd}
+        """
+
+
+
+# rule evidence_QC:
+#     input:
+#         OUTPUT_DIR + '/GatherBatchEvidence/MergeEvidence/' + BATCH + '.{evidence}.txt.gz',
+#     output:
+#         tmp_regions = temp(OUTPUT_DIR + "/EvidenceQC/MatrixQC/regions.{evidence}.bed"),
+#         tmp_local = temp(OUTPUT_DIR + "/EvidenceQC/MatrixQC/local.{evidence}.txt.gz"),
+#         tmp_local_tabix = temp(OUTPUT_DIR + "/EvidenceQC/MatrixQC/local.{evidence}.txt.gz.tbi"),
+#         QC_stats = OUTPUT_DIR + "/EvidenceQC/MatrixQC/" + BATCH +".{evidence}.QC_stats.txt",
+#         matrix = OUTPUT_DIR + "/EvidenceQC/MatrixQC/" + BATCH + ".{evidence}.QC_matrix.txt",
+#     params:
+#         distance = 1000000,
+#         genome ="resource/hg38.genome" ,
+#         ref_dict="resource/Homo_sapiens_assembly38.dict",
+#         mem=JV_MEM,
+#         contig_list = CONTIG_LIST,
+#         batch = BATCH
+#     resources:
+#         mem_mb=MEMORY_USAGE
+#     singularity: "sif_images/gatk-nightly_latest.sif"
+#     run:
+#         shell(f"""
+#         fgrep -v "#" {params.genome} | awk -v distance={params.distance} -v OFS="\\t" '{{ print $1, $2-distance, $2 }}' > {output.tmp_regions}
+
+#         if [ -s {output.tmp_regions} ]; then
+#             gatk --java-options "{params.mem}" PrintSVEvidence \\
+#             --sequence-dictionary {params.ref_dict} \\
+#             --evidence-file {input} \\
+#             -L {output.tmp_regions} \\
+#             -O {output.tmp_local}
+#         else
+#             touch {output.tmp_local}
+#             bgzip {output.tmp_local}
+#         fi
+
+#         tabix -f -s 1 -b 2 -e 2 {output.tmp_local}""")
+
+#         if {wildcards.evidence != "rd"}:
+#             shell(f"""
+#             src/sv-pipeline/00_preprocessing/misc_scripts/nonRD_matrix_QC.sh \\
+#                 -d {params.distance} \\
+#                 {output.tmp_local} \\
+#                 {params.genome} \\
+#                 {output.QC_stats}""")
+#         else :
+#             shell("""
+#             src/sv-pipeline/00_preprocessing/misc_scripts/RD_matrix_QC.sh \\
+#                 -d {params.distance} \\
+#                 {output.tmp_local} \\
+#                 {params.genome} \\
+#                 {output.QC_stats}
+#             """)
+#         shell(f"""
+#         cut -f1 {params.genome} > tmp/contig.sr.list
+#         python src/sv-pipeline/00_preprocessing/misc_scripts/qcstat2matrix.py {output.QC_stats} {params.batch} SR tmp/contig.sr.list
+#         touch {output.matrix}
+#         rm tmp/contig.sr.list
+#         """)
+#########################PLOT_MATRIX_QC################################
+
+rule PlotMatrixQC:
+    input:
+        expand(OUTPUT_DIR + "/EvidenceQC/MatrixQC/" + BATCH + ".{evidence}.QC_matrix.txt",evidence=("baf","rd","sr","pe")),
+    output:
+        OUTPUT_DIR + "/EvidenceQC/MatrixQC/" + BATCH + ".00_matrix_FC_QC.png"
+    params:
+        dir = OUTPUT_DIR + "/EvidenceQC/MatrixQC",
+        batch = BATCH
+    shell:
+        """
+        Rscript src/sv-pipeline/00_preprocessing/misc_scripts/plot_00_matrix_FC_QC.R {params.batch} {params.dir}
+        touch {output}
+        """

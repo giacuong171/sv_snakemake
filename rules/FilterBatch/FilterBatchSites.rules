@@ -1,0 +1,85 @@
+rule AdjudicateSV:
+    input:
+        metrics = rules.AggregateCallers.output        
+    conda:
+        "../../envs/genomeAD.yaml"
+    output:
+        scores = OUTPUT_DIR + "/FilterBatch/" + BATCH + ".scores",
+        cutoffs = OUTPUT_DIR + "/FilterBatch/" + BATCH + ".cutoffs"
+    shell:
+        """
+            svtk adjudicate {input.metrics} {output.scores} {output.cutoffs}
+        """
+
+rule RewriteScores:
+    input:
+        scores = rules.AdjudicateSV.output.scores,
+        cutoffs = rules.AdjudicateSV.output.cutoffs,
+        metrics = rules.AggregateCallers_common.output
+    output:
+        OUTPUT_DIR + "/FilterBatch/" + BATCH + ".updated_scores"
+    singularity:
+        "sif_images/rdtest.sif"
+    shell:
+        """
+        Rscript src/sv-pipeline/03_variant_filtering/scripts/modify_cutoffs.R \\
+            -c {input.cutoffs} \\
+            -m {input.metrics} \\
+            -s {input.scores} \\
+            -o {output}
+        """
+
+rule FilterAnnotateVcfs:
+    input:
+        vcf = OUTPUT_DIR + "/GenerateBatchMetrics/All_VCFs/" + BATCH + ".{source}.vcf.gz",
+        metrics = rules.AggregateCallers.output,
+        cutoffs= rules.AdjudicateSV.output.cutoffs,
+        scores = rules.RewriteScores.output,
+    output:
+        ftred = OUTPUT_DIR + "/FilterBatch/filtered.{source}.vcf.gz",
+    conda:
+        "../../envs/genomeAD.yaml"
+    shell:
+        """
+        cat \\
+        <(sed -e '1d' {input.scores} | fgrep -e DEL -e DUP | awk '($3!="NA" && $3>=0.5)' | cut -f1 | fgrep -w -f - <(zcat {input.vcf})) \\
+        <(sed -e '1d' {input.scores} | fgrep -e INV -e BND -e INS | awk '($3!="NA" && $3>=0.5)' | cut -f1 | fgrep -w -f - <(zcat {input.vcf}) | sed -e 's/SVTYPE=DEL/SVTYPE=BND/' -e 's/SVTYPE=DUP/SVTYPE=BND/' -e 's/<DEL>/<BND>/' -e 's/<DUP>/<BND>/') \\
+        | cat <(sed -n -e '/^#/p' <(zcat {input.vcf})) - \\
+        | scripts/vcf-sort -c \\
+        | bgzip -c \\
+        > {output.ftred}
+        """
+
+rule FilterAnnotateVcfs1:
+    input:
+        ftred=rules.FilterAnnotateVcfs.output.ftred,
+        metrics = rules.AggregateCallers.output,
+        cutoffs= rules.AdjudicateSV.output.cutoffs,
+    output:
+        ftred_coord = OUTPUT_DIR + "/FilterBatch/filtered.corrected_coords.{source}.vcf.gz",
+    conda:
+        "../../envs/genomeAD.yaml"
+    shell:
+        """
+        src/sv-pipeline/03_variant_filtering/scripts/rewrite_SR_coords.py {input.ftred} {input.metrics} {input.cutoffs} stdout \\
+        | scripts/vcf-sort -c \\
+        | bgzip -c \\
+        > {output.ftred_coord}
+        """
+
+rule FilterAnnotateVcfs2:
+    input:
+        ftred_coord=rules.FilterAnnotateVcfs1.output.ftred_coord,
+        scores = rules.RewriteScores.output,
+    output:
+        annotate_vcf = OUTPUT_DIR + "/FilterBatch/" + BATCH + ".with_evidence.{source}.vcf",
+        annotate_vcf_gz = OUTPUT_DIR + "/FilterBatch/" + BATCH + ".with_evidence.{source}.vcf.gz"
+    conda:
+        "../../envs/genomeAD.yaml"
+    shell:
+        """
+        src/sv-pipeline/03_variant_filtering/scripts/annotate_RF_evidence.py {input.ftred_coord} {input.scores} {output.annotate_vcf}
+        bgzip -c {output.annotate_vcf} > {output.annotate_vcf_gz}
+        """
+
+       

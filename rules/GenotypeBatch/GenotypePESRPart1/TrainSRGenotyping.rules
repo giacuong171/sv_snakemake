@@ -1,0 +1,53 @@
+
+rule CountSR:
+    input:
+        evidence=OUTPUT_DIR + '/GatherBatchEvidence/MergeEvidence/' + BATCH + '.sr.txt.gz',
+        samples=rules.FilterSampleList.output,
+        med_cov= rules.T_CalcMedCov.output,
+        vcf= rules.MergePesrVcfs.output,
+    output:
+        sr_count=OUTPUT_DIR + '/GenotypeBatch/GenotypePESRPart1/SR/split/sr_counts.txt',
+        sr_sum = OUTPUT_DIR + '/GenotypeBatch/GenotypePESRPart1/SR/split/sr_sum.txt.gz'
+    conda:
+        "../../../envs/genomeAD.yaml"
+    shell:
+        """
+        svtk count-sr -s {input.samples} \\
+            --medianfile {input.med_cov} {input.vcf} \\
+            {input.evidence} {output.sr_count} 
+        
+        src/sv-pipeline/04_variant_resolution/scripts/sum_SR.sh \\
+            {output.sr_count} {output.sr_sum}
+            
+        """
+
+rule GenotypeSRPart1:
+    input:
+        vcf = rules.MergePesrVcfs.output,
+        SR_counts = rules.CountSR.output.sr_count,
+        SR_sum = rules.CountSR.output.sr_sum,
+        RD_melted_genotypes = rules.MergeGenotypeResults.output.melted_genotypes, 
+        RF_cutoffs = rules.AdjudicateSV.output.cutoffs,
+        samples=rules.FilterSampleList.output,
+        PE_train = rules.GenotypePEPart1.output.PE_train,
+        PE_genotypes = rules.GenotypePEPart1.output.genotypes
+    params:
+        ref_dict="resource/Homo_sapiens_assembly38.dict",
+        op_dir = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/SR"
+    output:
+        OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/SR/sr_metric_file.txt",
+    conda:
+        "../../../envs/genomeAD.yaml"
+    shell:
+        """
+        src/sv-pipeline/04_variant_resolution/scripts/SR_genotype.opt_part1.sh \\
+        {input.vcf} \\
+        {input.SR_counts} \\
+        {input.SR_sum} \\
+        {input.RD_melted_genotypes} \\
+        {input.RF_cutoffs} \\
+        {input.samples} \\
+        {input.PE_train} \\
+        {input.PE_genotypes} \\
+        {params.op_dir}
+        """

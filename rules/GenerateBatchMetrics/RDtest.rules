@@ -1,0 +1,121 @@
+#TODO: + split the input file for rdtest 
+
+rule RdTest_autosomes:
+    input:
+        bed = OUTPUT_DIR + "/GenerateBatchMetrics/All_Beds/SEP/" + BATCH + '.{chrom}.{source}.bed',
+        bincov = rules.ZPaste.output.matrix_file,
+        medmat = rules.T_CalcMedCov.output,
+    output:
+        metrics=OUTPUT_DIR + '/GenerateBatchMetrics/RDtest/Metrics/' + BATCH + '.{source}.{chrom}.metrics',
+    wildcard_constraints:
+        chrom='(' + '|'.join(AUTOSOMAL) + ')',
+        source='(' + '|'.join(ALGO) + ')'
+    params:
+        prefix = BATCH + '.{source}.{chrom}',
+        famfile = config['base']['fam_file'],
+        sample = OUTPUT_DIR + "/sample_list.txt",
+        op_dir = OUTPUT_DIR + '/GenerateBatchMetrics/RDtest/Metrics/',
+    singularity:
+        "sif_images/rdtest.sif"
+    threads: workflow.cores * 0.4
+    shell:
+        """
+        Rscript src/RdTest/RdTest.R \\
+            -b {input.bed} \\
+            -n {params.prefix} \\
+            -o {params.op_dir} \\
+            -c {input.bincov} \\
+            -m {input.medmat} \\
+            -f {params.famfile} \\
+            -w {params.sample} 
+        
+        touch {output}
+        """
+
+rule merge_rdtest_autosomes:
+    input:
+        rules.RdTest_autosomes.output
+    output:
+        OUTPUT_DIR + '/GenerateBatchMetrics/RDtest/' + BATCH + '.{source}.{chrom}.stat'
+    wildcard_constraints:
+        chrom='|'.join(AUTOSOMAL)
+    shell:
+        """
+        cat {input} \\
+            | sed -r -e '/^chr\\s/d' \\
+            | sort -k1,1V -k2,2n \
+            | cat <(head -n1 {input[0]}) - \
+            > {output}
+        """
+
+
+rule RdTest_allosome:
+    input:
+        bed = OUTPUT_DIR + "/GenerateBatchMetrics/All_Beds/SEP/" + BATCH + '.{chrom}.{source}.bed',
+        bincov = rules.ZPaste.output.matrix_file,
+        medmat = rules.T_CalcMedCov.output,
+        whitelist = rules.make_sex_whitelists.output,
+    output:
+        metrics=OUTPUT_DIR + '/GenerateBatchMetrics/RDtest/Metrics/' + BATCH + '.{source}.{chrom}.{sex}.metrics',
+    wildcard_constraints:
+        chrom='(' + '|'.join(['chrX','chrY']) + ')'
+    params:
+        prefix = BATCH + '.{source}.{chrom}.{sex}',
+        famfile = config['base']['fam_file'],
+        op_dir = OUTPUT_DIR + '/GenerateBatchMetrics/RDtest/Metrics/',
+    singularity:
+        "sif_images/rdtest.sif"
+    threads: workflow.cores * 0.4
+    shell:
+        """
+        Rscript src/RdTest/RdTest.R \\
+            -b {input.bed} \\
+            -n {params.prefix} \\
+            -o {params.op_dir} \\
+            -c {input.bincov} \\
+            -m {input.medmat} \\
+            -f {params.famfile} \\
+            -w {input.whitelist} 
+        
+        touch {output}
+        """
+
+rule merge_rdtest_Y:
+    input:
+        OUTPUT_DIR + '/GenerateBatchMetrics/RDtest/Metrics/' + BATCH + '.{source}.chrY.males.metrics'
+    output:
+        OUTPUT_DIR + '/GenerateBatchMetrics/RDtest/' + BATCH + '.{source}.chrY.stat'
+    wildcard_constraints:
+        chrom='chrY'
+    threads: 1
+    shell:
+        """
+        cp {input} {output}
+        """
+
+rule merge_rdtest_X:
+    input:
+        males= OUTPUT_DIR + '/GenerateBatchMetrics/RDtest/Metrics/' + BATCH + '.{source}.chrX.males.metrics',
+        females= OUTPUT_DIR + '/GenerateBatchMetrics/RDtest/Metrics/' + BATCH + '.{source}.chrX.females.metrics',
+    wildcard_constraints:
+        chrom='chrX'
+    output:
+        OUTPUT_DIR + '/GenerateBatchMetrics/RDtest/' + BATCH + '.{source}.chrX.stat'
+    run:
+        males = pd.read_table(input.males)
+        females = pd.read_table(input.females)
+        male_only = females.P == 'No_samples_for_analysis'
+        females.loc[male_only] = males
+        females.to_csv(output[0], sep='\t', index=False)
+
+rule MergeStats_RD:
+    input:
+        expand(OUTPUT_DIR + '/GenerateBatchMetrics/RDtest/' + BATCH + '.{source}.{chrom}.stat',source = ['manta','wham','depth'],chrom=CONTIG_LIST )
+    output:
+        OUTPUT_DIR + '/GenerateBatchMetrics/Results/' + BATCH + '.RD.stats'
+    threads: 2
+    shell:
+        """
+        cat {input[1]} > {output}
+        for f in {input}; do sed 1d $f >> {output}; done
+        """

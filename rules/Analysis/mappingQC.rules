@@ -1,0 +1,7 @@
+rule mappingQC:
+    input:
+        bin_mat = rules.BuildPloidyMatrix.output
+    output:
+        out = config['base']['results_dir'] + "/Analysis/MappingQC/" + "{sample}_mappingQC.png"
+    script:
+        '../../scripts/mappingQC.R'

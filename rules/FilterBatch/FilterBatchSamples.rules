@@ -1,0 +1,94 @@
+rule CountSVsPerSamplePerType:
+    input:
+        vcf = OUTPUT_DIR + "/FilterBatch/" + BATCH + ".with_evidence.{source}.vcf.gz",
+    output:
+        OUTPUT_DIR + "/FilterBatch/" + BATCH + ".{source}.svcounts.txt"
+    conda:
+        "../../envs/genomeAD.yaml"
+    shell:
+        """
+        svtk count-svtypes {input.vcf} {output}
+        """
+
+rule IdentifyOutlierSamples_By_IQR:
+    input:
+        vcf = OUTPUT_DIR + "/FilterBatch/" + BATCH + ".with_evidence.{source}.vcf.gz",
+        svcounts = rules.CountSVsPerSamplePerType.output
+    output:
+        OUTPUT_DIR + "/FilterBatch/" + BATCH + "_IQR_outliers.{source}.txt"
+    params:
+        IQR_cutoff = 6
+    singularity:
+        "sif_images/rdtest.sif"
+    shell:
+        """
+        Rscript src/sv-pipeline/03_variant_filtering/scripts/get_outliers_from_svcounts.helper.R \\
+            {input.svcounts} \\
+            {params.IQR_cutoff} \\
+            {output}
+        """
+
+rule CatOutliers:
+    input:
+        expand(rules.IdentifyOutlierSamples_By_IQR.output,source = ['manta','wham','depth'])
+    output:
+        test = OUTPUT_DIR + "/FilterBatch/" + BATCH + ".outliers.samples.tmp.list",
+        final = OUTPUT_DIR + "/FilterBatch/" + BATCH + ".outliers.samples.list"
+    shell:
+        """
+        for file in {input}; do
+            cat $file >> {output.test}
+        done
+        sort {output.test} | uniq > {output.final}
+        """
+
+rule ExcludeOutliers:
+    input:
+        vcf = OUTPUT_DIR + "/FilterBatch/" + BATCH + ".with_evidence.{source}.vcf.gz",
+        outliers = rules.CatOutliers.output.final,
+    output:
+        index = OUTPUT_DIR + "/FilterBatch/indexes_to_exclude.{source}.txt",
+        final = OUTPUT_DIR + "/FilterBatch/" + BATCH + ".{source}.outliers_removed.vcf.gz"
+    conda:
+        "../../envs/genomeAD.yaml"
+    shell:
+        """
+        OUTLIERS={input.outliers}
+        if [ $( wc -c < $OUTLIERS ) -gt 1 ]; then
+            zcat {input.vcf} | fgrep "#" | fgrep -v "##" \
+            | sed 's/\\t/\\n/g' | awk -v OFS="\\t" '{{ print $1, NR }}' \\
+            | fgrep -wf $OUTLIERS | cut -f2 \\
+            > {output.index}
+            zcat {input.vcf} | \
+            cut --complement -f$( cat {output.index} | paste -s -d, ) \
+            | vcftools --mac 1 --vcf - --recode --recode-INFO-all --stdout \
+            | bgzip -c > {output.final}
+        else
+            cp {input.vcf} {output.final}
+        fi
+        tabix {output.final}
+        """
+
+rule FilterSampleList:
+    input:
+        original_samples = OUTPUT_DIR + "/sample_list.txt",
+        outlier_samples = rules.CatOutliers.output.final
+    output:
+        OUTPUT_DIR + "/filtered_sample_list.txt"
+    shell:
+        """
+        fgrep -wvf {input.outlier_samples} {input.original_samples} > {output}
+        """
+
+rule MergePesrVcfs:
+    input:
+        vcfs= expand(rules.ExcludeOutliers.output.final,source=["manta","wham"])
+    output:
+        concat_vcf = OUTPUT_DIR + "/FilterBatch/" + BATCH + ".filtered_pesr_merged.vcf.gz"
+    conda:
+        "../../envs/genomeAD.yaml"
+    shell:
+        """
+            bcftools concat --no-version --allow-overlaps -Oz {input.vcfs} > {output.concat_vcf}
+            tabix -f {output.concat_vcf}
+        """

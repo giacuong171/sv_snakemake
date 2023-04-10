@@ -1,0 +1,83 @@
+
+"""
+    rule for preprocessing bam file 
+"""
+
+rule CollectCounts:
+    input:
+        bam = get_bam_file,
+        ref = config['ref_38']['fasta']
+    output:
+        OUTPUT_DIR + "/GatherSampleEvidence/CollectCounts/{sample}.counts.tsv.gz",
+    conda: "../../envs/gatk.yaml"
+    resources: mem_mb=MEMORY_USAGE
+    threads: GATK_thread
+    benchmark: 
+        "benchmark/CollectReadCounts/{sample}.CollectRead.txt"
+    log:
+        "logs/CollectReadCounts/{sample}.CollectRead.log"
+    params:
+        interval = config['ref_38']['interval_list'],
+        mem=JV_MEM,
+    shell:
+        """
+        gatk CollectReadCounts --java-options "{params.mem}" -L {params.interval} \\
+        --input {input.bam} \\
+        --reference {input.ref} \\
+        --format TSV --interval-merging-rule OVERLAPPING_ONLY \\
+        --output {output} 2> {log}
+        """
+        
+rule zip_CollectCounts:
+    input:
+        rules.CollectCounts.output
+    output:
+        OUTPUT_DIR + "/GatherSampleEvidence/CollectCounts/{sample}.counts.tsv.gz"
+    resources: mem_mb=5000
+    threads: 5
+    shell:
+        """
+            sed -ri "s/@RG\tID:GATKCopyNumber\tSM:.+/@RG\tID:GATKCopyNumber\tSM:{wildcards.sample}/g" {input}
+            bgzip {input}
+            touch {output}
+        """
+      
+rule CondenseReadCounts:
+    input:
+        rules.zip_CollectCounts.output,
+    output:
+        OUTPUT_DIR + "/GatherSampleEvidence/CondenseCounts/condensed_counts.{sample}.tsv"
+    params:
+        docker_container="gatksv/gatk:condensecounts-7396ae99aaab07e29c92b509a6515508fbe68158",
+        sn_dir = config['base']['wf_dir'],
+        output_dir=OUTPUT_DIR + "/GatherSampleEvidence/CondenseCounts",
+        mem=JV_MEM
+    resources: 
+        mem_mb=MEMORY_USAGE,
+        tmpdir="./tmp/"
+    threads: GATK_thread
+    shell:
+        """
+            set -e
+            gunzip -c {input} > ./tmp/{wildcards.sample}.counts.tsv
+            docker run -v {params.sn_dir}:/sn_dir -v {params.output_dir}:/output {params.docker_container}  \\
+            gatk --java-options "{params.mem}" \\
+                CondenseReadCounts \\
+                -I /sn_dir/tmp/{wildcards.sample}.counts.tsv \\
+                -O /output/condensed_counts.{wildcards.sample}.tsv\\
+                --factor 20 \\
+                --out-bin-length 2000
+            sed -ri "s/^@RG\tID:GATKCopyNumber\tSM:.+/@RG\tID:GATKCopyNumber\tSM:{wildcards.sample}/g" {output}
+        """
+
+rule CountsToIntervals:
+    input:
+        OUTPUT_DIR + "/GatherSampleEvidence/CondenseCounts/condensed_counts."+ sample_names[0] + ".tsv"
+    output:
+        OUTPUT_DIR + "/GatherSampleEvidence/CondenseCounts/condensed_intervals.interval_list"
+    threads: 5
+    shell:
+        """
+            grep "^@" {input} > {output}
+            grep -v "^@" {input} | sed -e 1d | awk -F "\t" -v OFS="\t" '{{print $1,$2,$3,"+","."}}' >> {output}
+        """

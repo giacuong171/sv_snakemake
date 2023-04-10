@@ -1,0 +1,21 @@
+rule CalcMedCov:
+    input:
+        bincov_matrix = rules.ZPaste.output.matrix_file,
+    output:
+        medianCov = config['base']['results_dir'] + '/EvidenceQC/medCov/' + config['base']['batch'] +'_medianCov.bed'
+    singularity: "sif_images/rdtest.sif"
+    shell:
+        """
+        set -euo pipefail
+        zcat {input.bincov_matrix} > batch_fixed.bed 
+        Rscript ./src/WGD/bin/medianCoverage.R batch_fixed.bed -H {output}
+        """
+
+rule T_CalcMedCov:
+    input:
+        medCov_bed=rules.CalcMedCov.output
+    output:
+        transposed_bed=config['base']['results_dir'] + '/EvidenceQC/medCov/' + config['base']['batch'] +'_medianCov.transpose.bed'
+    singularity: "sif_images/rdtest.sif"
+    script:
+        '../../scripts/transposed.R'

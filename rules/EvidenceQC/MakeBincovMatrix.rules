@@ -1,0 +1,47 @@
+#need to fix this rule SetBins. It run only one time with the first countfile
+#TODO: add descriptions for the bash scripts
+#need to write a rule to assign permision for all files in scripts
+
+rule SetBins:
+    input:
+        OUTPUT_DIR + "/GatherSampleEvidence/CollectCounts/" + sample_names[0] + ".counts.tsv.gz"
+    output:
+        bin_locs =OUTPUT_DIR + '/EvidenceQC/mbm/locs.bed.gz',
+        binsize = OUTPUT_DIR + '/EvidenceQC/mbm/binsize.txt',
+    shell:
+        """
+            scripts/create_bin_file.sh {input} {output.binsize} {output.bin_locs}
+        """
+
+#this rule run on all count files
+rule MakeBincovMatrixColumns:
+    input:
+        count_file = rules.zip_CollectCounts.output,
+        bin_locs = rules.SetBins.output.bin_locs,
+        binsize_file = rules.SetBins.output.binsize
+    output:
+        bincov_bed= OUTPUT_DIR + '/EvidenceQC/mbm/{sample}.RD.txt'
+    shell:
+        """
+            scripts/MakeBincovMatrixColumns.sh {input.count_file} {input.bin_locs} {input.binsize_file} {output} {wildcards.sample}
+        """
+
+
+
+rule ZPaste:
+    input:
+        column_files = expand(OUTPUT_DIR + '/EvidenceQC/mbm/{sample}.RD.txt',sample=sample_names),
+        bin_locs = rules.SetBins.output.bin_locs,
+    output:
+        matrix_file = OUTPUT_DIR + '/EvidenceQC/mbm/' + config['base']['batch'] + '.matrix.RD.txt.gz',
+        matrix_idx = OUTPUT_DIR + '/EvidenceQC/mbm/' + config['base']['batch'] + '.matrix.RD.txt.gz.tbi'
+    shell:
+        """
+        gunzip -c {input.bin_locs} > tmp.locs.bed
+        paste tmp.locs.bed {input.column_files}  > tmp.matrix.RD.txt
+        bgzip -c tmp.matrix.RD.txt > {output.matrix_file}
+        tabix -p bed {output.matrix_file}
+        touch {output.matrix_idx}
+        rm tmp.matrix.RD.txt tmp.locs.bed
+        """
+

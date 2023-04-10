@@ -1,0 +1,49 @@
+
+rule RunPESRCollection:
+    input:
+        bam = get_bam_file,
+        ref = config['ref_38']['fasta']
+    output:
+        pe = OUTPUT_DIR + '/GatherSampleEvidence/PESR_Collection/{sample}.pe.txt.gz',
+        sr = OUTPUT_DIR + '/GatherSampleEvidence/PESR_Collection/{sample}.sr.txt.gz',
+        sd = OUTPUT_DIR + '/GatherSampleEvidence/PESR_Collection/{sample}.ld.txt.gz' 
+    threads: workflow.cores * 0.5
+    params:
+        sd_locs_vcf="resource/Homo_sapiens_assembly38.dbsnp138.vcf"
+    conda: "../../envs/gatk.yaml"
+    resources: mem_mb=MEMORY_USAGE
+    shell:
+        """
+        gatk CollectSVEvidence \\
+            -I {input.bam} \\
+            --pe-file {output.pe} \\
+            --sr-file {output.sr} \\
+            --allele-count-file {output.sd} \\
+            --allele-count-vcf {params.sd_locs_vcf} \\
+            --sample-name {wildcards.sample} \\
+            -R {input.ref}
+        """
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 

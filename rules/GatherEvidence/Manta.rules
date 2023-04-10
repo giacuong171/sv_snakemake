@@ -1,0 +1,61 @@
+#Need to add pipeline for running with other SV_Callers
+#Manta wont execute again if the directory is already created
+#TODO: create a function to check, that the configManta.py is already created. 
+
+
+if config['SV_callers']['manta'] == 1:
+    rule RunManta:
+        input:
+            bam = get_bam_file,
+            ref = config['ref_38']['fasta']
+        output:
+            vcf = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/manta/config/results/variants/diploidSV.vcf.gz'
+        conda:
+            "../../envs/manta.yaml"
+        benchmark:
+            "benchmark/Manta/{sample}.manta.txt"
+        params:
+            rD = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/manta/config',
+            memory = 8,
+            region = config['ref_38']['manta_region']
+        threads: 4
+        resources:
+            mem_mb=config['manta']['memory']
+        shell:
+            """
+                set -e
+                if [ ! -f {output.vcf} ]; then \\
+                    rm -rf {params.rD}
+                fi
+                configManta.py --bam {input.bam} \\
+                    --referenceFasta {input.ref} \\
+                    --runDir {params.rD} \\
+                    --callRegions {params.region}
+                python2 {params.rD}/runWorkflow.py --mode local -j {threads} -g {params.memory}
+                touch {output}
+            """
+            
+    rule conInv_manta:
+        input:
+            vcf = rules.RunManta.output,
+            ref = config['ref_38']['fasta']
+        output:
+            tmp_vcf = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/manta/{sample}.diploidSV.vcf',
+            zip_vcf = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/manta/{sample}.manta.vcf.gz',
+            tbi_vcf = OUTPUT_DIR + '/GatherSampleEvidence/SV_Calling/{sample}/manta/{sample}.manta.vcf.gz.tbi',
+        conda: 
+            "../../envs/manta.yaml"
+        threads: workflow.cores * 0.5
+        resources:
+            mem_mb=MEMORY_USAGE
+        shell:
+            """
+            st_path=$(which samtools)
+            src/manta/convertInversion.py $st_path {input.ref} {input.vcf} | bcftools reheader -s <(echo "{wildcards.sample}") > {output.tmp_vcf}
+            bgzip -c {output.tmp_vcf} > {output.zip_vcf}
+            tabix -p vcf {output.zip_vcf}
+            touch {output.tbi_vcf}
+            """
+
+    
+    

@@ -1,0 +1,248 @@
+rule MakeSubsetVCF_bca:
+    input:
+        vcf= rules.AddBatchSamplesPESR.output.final,
+        bed=rules.SplitVariants_gtp2.output.bca
+    output:
+        OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart2/split/bca.vcf.gz"
+    shell:
+        """
+        zcat {input.vcf} | fgrep -e "#" > tmp/bca.vcf
+        zcat {input.vcf} | {{ fgrep -w -f <(cut -f4 {input.bed}) || true; }} >> tmp/bca.vcf
+        bgzip -c tmp/bca.vcf > {output}
+        rm tmp/bca.vcf
+        """
+#########################################PE################################################
+
+rule VcfToBed_pe_bca:
+    input:
+        vcf =  OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart2/split/bca.vcf.gz"
+    output:
+        OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart2/split/region.pe.merged.bca.bed"
+    conda:
+        "../../../envs/genomeAD.yaml"
+    shell:
+        """
+        svtk vcf2bed --split-bnd --no-header {input.vcf} tmp/bca_pe.bed
+        awk -v OFS="\\t" -v window=500 '{if ($2-window>0) {{print $1,$2-window,$2+window}}else{{print $1,0,$2+window}}}' tmp/bca_pe.bed  >  tmp/bca.pe.region.bed
+        awk -v OFS="\\t" -v window=500 '{if ($3-window>0) {{print $1,$3-window,$3+window}}else{{print $1,0,$3+window}}}' tmp/bca_pe.bed  >>  tmp/bca.pe.region.bed
+        sort -k1,1 -k2,2n tmp/bca.pe.region.bed > tmp/bca.pe.region.sorted.bed
+        bedtools merge -i tmp/bca.pe.region.sorted.bed > {output}
+
+        rm tmp/bca_pe.bed \\
+            tmp/bca.pe.region.bed \\
+            tmp/bca.pe.region.sorted.bed
+        """
+
+rule CountPE_bca:
+    input:
+        evidence =  OUTPUT_DIR + '/GatherBatchEvidence/MergeEvidence/' + BATCH + '.pe.txt.gz',
+        samples = rules.FilterSampleList.output,
+        med_cov = rules.T_CalcMedCov.output,
+        vcf = rules.MakeSubsetVCF_bca.output,
+    output:
+        OUTPUT_DIR + '/GenotypeBatch/GenotypePESRPart2/split/bca.pe_counts.txt'
+    conda:
+        "../../../envs/genomeAD.yaml"
+    shell:
+        """
+        svtk count-pe -s {input.samples} --medianfile {input.med_cov} {input.vcf} {input.evidence} {output}
+        """
+
+rule GenotypePEPart2_bca:
+    input:
+        PE_counts = rules.CountPE_bca.output,
+        metrics = rules.GenotypePEPart1.output.PE_metrics,
+    params:
+        op_dir=OUTPUT_DIR + '/GenotypeBatch/GenotypePESRPart2/PE_bca'
+    output:
+        genotypes = OUTPUT_DIR + '/GenotypeBatch/GenotypePESRPart2/PE_bca/'+"pe.geno.withquality.txt.gz",
+        varGQ = OUTPUT_DIR + '/GenotypeBatch/GenotypePESRPart2/PE_bca/'+"pe.variant.quality.final.txt.gz"
+    shell:
+        """
+        src/sv-pipeline/04_variant_resolution/scripts/PE_genotype.opt_part2.sh \\
+            {input.PE_counts} \\
+            {input.metrics} \\
+            {params.op_dir}
+        touch {output}
+        """
+#########################################SR########################################
+
+rule CountSR_bca:
+    input:
+        evidence = OUTPUT_DIR + "/GatherBatchEvidence/MergeEvidence/" + BATCH + ".sr.txt.gz",
+        samples = rules.FilterSampleList.output,
+        med_cov = rules.T_CalcMedCov.output,
+        vcf = rules.MakeSubsetVCF_bca.output,
+    output:
+        sr_count=OUTPUT_DIR + '/GenotypeBatch/GenotypePESRPart2/split/bca.sr_counts.txt',
+        sr_sum = OUTPUT_DIR + '/GenotypeBatch/GenotypePESRPart2/SR_bca/' + BATCH + ".sr_sum.txt.gz"
+    conda:
+        "../../../envs/genomeAD.yaml"
+    shell:
+        """
+        svtk count-sr -s {input.samples} --medianfile {input.med_cov} {input.vcf} {input.evidence} {output.sr_count}
+        src/sv-pipeline/04_variant_resolution/scripts/sum_SR.sh {output.sr_count} {output.sr_sum}
+        """
+
+rule GenotypeSRPart2_bca:
+    input:
+        vcf = rules.MakeSubsetVCF_bca.output,
+        SR_counts = rules.CountSR_bca.output.sr_count,
+        SR_sum = rules.CountSR_bca.output.sr_sum,
+        SR_metrics = rules.GenotypeSRPart1.output
+    output:
+        genotypes = OUTPUT_DIR + '/GenotypeBatch/GenotypePESRPart2/SR_bca/Results/sr.geno.withquality.txt.gz',
+        varGQ =  OUTPUT_DIR + '/GenotypeBatch/GenotypePESRPart2/SR_bca/Results/sr.variant.quality.final.txt.gz',
+        background_fail =  OUTPUT_DIR + '/GenotypeBatch/GenotypePESRPart2/SR_bca/Results/background.variant.fail.txt',
+        bothside_pass =  OUTPUT_DIR + '/GenotypeBatch/GenotypePESRPart2/SR_bca/Results/both.pass.txt'
+    conda:
+        "../../../envs/genomeAD.yaml"
+    params:
+        op_dir = OUTPUT_DIR + '/GenotypeBatch/GenotypePESRPart2/SR_bca/Results'
+    shell:
+        """
+        src/sv-pipeline/04_variant_resolution/scripts/SR_genotype.opt_part2.sh \\
+            {input.vcf} \\
+            {input.SR_counts} \\
+            {input.SR_sum} \\
+            {input.SR_metrics} \\
+            {params.op_dir}
+        """
+
+#########################################RD########################################
+rule EvindeceRD_bca:
+    input:
+        bed= rules.SplitVariants_gtp2.output.bca,
+        coveragefile=rules.ZPaste.output.matrix_file,
+    output:
+        OUTPUT_DIR + '/GenotypeBatch/GenotypePESRPart2/RD_bca/evidence/local.RD.txt.gz',
+    threads: 8
+    params:
+        ref_dict="resource/Homo_sapiens_assembly38.dict",
+        mem=JV_MEM,
+    singularity:
+        "sif_images/gatk-nightly_latest.sif"
+    shell:
+        """
+        gatk --java-options "{params.mem}" \\
+                PrintSVEvidence \\
+                --sequence-dictionary {params.ref_dict} \\
+                --evidence-file {input.coveragefile} \\
+                -L {input.bed} \\
+                -O {output}
+        tabix -fp bed {output}
+        """
+
+rule GenotypeRDPart2_bca:
+    input:
+        bed= rules.SplitVariants_gtp2.output.bca,
+        evidence = rules.EvindeceRD_bca.output,
+        med_cov = rules.T_CalcMedCov.output,
+        famfile = rules.Subset_ped_file.output,
+        samples = rules.FilterSampleList.output,
+        gt_cutoffs = rules.UpdateCutoff.output.pesr_sepcutoff,
+    output:
+        genotypes = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart2/RD_bca/bca.pesr.geno",
+        copy_states = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart2/RD_bca/bca.pesr.median_geno",
+        metrics = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart2/RD_bca/bca.pesr.metrics",
+        gq = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart2/RD_bca/bca.pesr.gq",
+        varGQ = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart2/RD_bca/bca.pesr.vargq",
+    singularity:
+        "sif_images/rdtest.sif"
+    params:
+        bin_exclude= config['ref_38']['bin_exclude'],
+        op_dir= OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart2/RD_bca/",
+        n_bins= 100000,
+        prefix= "bca.pesr"
+    shell:
+        """
+        Rscript src/RdTest/RdTest.R \\
+            -b {input.bed} \\
+            -c {input.evidence} \\
+            -m {input.med_cov} \\
+            -f {input.famfile} \\
+            -o {params.op_dir} \\
+            -n {params.prefix} \\
+            -w {input.samples} \\
+            -i {params.n_bins} \\
+            -r {input.gt_cutoffs} \\
+            -y {params.bin_exclude} \\
+            -g TRUE
+
+        touch {output}    
+        """
+
+#could merge this step to the previous step, when docker contains python envs
+
+rule melted_RD_geno:
+    input:
+        geno=rules.GenotypeRDPart2_bca.output.genotypes,
+        gq = rules.GenotypeRDPart2_bca.output.gq
+    output:
+        tp = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart2/RD_bca/genotype/rd.geno.cnv.bed",
+        final = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart2/RD_bca/genotype/rd.geno.cnv.bed.gz",
+    conda:
+        "../../../envs/genomeAD.yaml"
+    shell:
+        """
+        src/sv-pipeline/04_variant_resolution/scripts/merge_RdTest_genotypes.py {input.geno} {input.gq} {output.tp}
+        sort -k1,1V -k2,2n {output.tp} | uniq | bgzip -c > {output.final}
+        """
+############################GQ##############################
+
+rule IntegrateGQ_bca:
+    input:
+        vcf = rules.MakeSubsetVCF_bca.output,
+        RD_melted_genotypes=rules.melted_RD_geno.output.final,
+        RD_vargq=rules.GenotypeRDPart2_bca.output.varGQ,
+        PE_genotypes=rules.GenotypePEPart2_bca.output.genotypes,
+        PE_vargq=rules.GenotypePEPart2_bca.output.varGQ,
+        SR_genotypes= rules.GenotypeSRPart2_bca.output.genotypes,
+        SR_vargq = rules.GenotypeSRPart2_bca.output.varGQ
+    output:
+        genotypes = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart2/IntegrateGQ_bca/genotype.indiv.txt.gz",
+        varGQ = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart2/IntegrateGQ_bca/genotype.variant.txt.gz",
+    conda:
+        "../../../envs/genomeAD.yaml"
+    params:
+        op_dir= OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart2/IntegrateGQ"
+    shell:
+        """
+        src/sv-pipeline/04_variant_resolution/scripts/IntegrateGQ.sh \\
+            {input.vcf} \\
+            {input.RD_melted_genotypes} \\
+            {input.RD_vargq} \\
+            {input.PE_genotypes} \\
+            {input.PE_vargq} \\
+            {input.SR_genotypes} \\
+            {input.SR_vargq} \\
+            {params.op_dir}
+
+        touch {output}
+        """
+
+rule AddGenotypes_bca:
+    input:
+        vcf = rules.MakeSubsetVCF_bca.output,
+        genotypes = rules.IntegrateGQ_bca.output.genotypes,
+        varGQ=rules.IntegrateGQ_bca.output.varGQ,
+    output: 
+        tmp = temp(OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart2/AddGenotypes_bca/" + BATCH +".genotyped.vcf"),
+        genotype_vcf = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart2/AddGenotypes_bca/" + BATCH +".genotyped.vcf.gz",
+    conda:
+        "../../../envs/genomeAD.yaml"
+    params:
+        batch = BATCH
+    shell:
+        """
+        gzip -cd {input.varGQ} | awk '$5 == "." {{print $1}}' > tmp/bad.bca.vargq.list
+        gzip -cd {input.vcf} | {{ grep -wvf tmp/bad.bca.vargq.list || [[ $? == 1 ]]; }} | bgzip > tmp/clean.bca.vcf.gz
+        gzip -cd {input.genotypes} | {{ grep -wvf tmp/bad.bca.vargq.list || [[ $? == 1 ]]; }} | bgzip > tmp/clean.bca.genotypes.txt.gz
+        gzip -cd {input.varGQ} | {{ grep -wvf tmp/bad.bca.vargq.list || [[ $? == 1 ]]; }} | bgzip > tmp/clean.bca.vargq.txt.gz
+
+        src/sv-pipeline/04_variant_resolution/scripts/add_genotypes.py tmp/clean.bca.vcf.gz \\
+        tmp/clean.bca.genotypes.txt.gz \\
+        tmp/clean.bca.vargq.txt.gz \\
+        {output.tmp};
+        vcf-sort -c {output.tmp} | bgzip -c > {output.genotype_vcf} 
+        """

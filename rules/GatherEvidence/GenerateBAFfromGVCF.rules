@@ -1,0 +1,22 @@
+rule GenerateBAF_fromGvcf:
+    input:
+        config['base']['GVCF']
+    output:
+        baf = OUTPUT_DIR + '/GatherSampleEvidence/PESR_Collection/' + BATCH + '.baf.txt.gz'
+    params:
+        sample_list= OUTPUT_DIR + "/sample_list.txt"
+    conda:
+        "../../envs/genomeAD.yaml"
+    shell:
+        """
+        python src/sv-pipeline/02_evidence_assessment/02d_baftest/scripts/Filegenerate/generate_baf.py \\
+            --unfiltered \\
+            --samples-list {params.sample_list} \\
+            --ignore-missing-vcf-samples \\
+            {input} \\
+            | bgzip -c \\
+            > {output}
+        
+        tabix -s1 -b2 -e2 {output}
+
+        """

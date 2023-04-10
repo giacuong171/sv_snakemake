@@ -1,0 +1,39 @@
+rule BuildWGDMatrix:
+    input:
+        bincov_matrix= rules.ZPaste.output.matrix_file,
+    output:
+        WGD_matrix = config['base']['results_dir'] + '/EvidenceQC/WGD/' + config['base']['batch'] +'_WGD_scoring_matrix_output.bed.gz'
+    params:
+        wgd_scoring_mask = config['evidenceQC']['wgd_scoring_mask']
+    conda:
+        "../../envs/bedtools.yaml"
+    shell:
+            "zcat {input.bincov_matrix} | head -n 1 > tmp/batch.header.tmp.txt && "
+            "sed -i 's/#//g' tmp/batch.header.tmp.txt"
+            """
+            set -o pipefail
+            zcat {input.bincov_matrix}  \\
+            | bedtools intersect -f 0.49 -wa -u \\
+            -a - \\
+            -b {params.wgd_scoring_mask} \\
+            | sort -Vk1,1 -k2,2n -k3,3n \\
+            > tmp/batch_WGD_scoring_matrix.tmp.bed
+            
+            cat tmp/batch.header.tmp.txt tmp/batch_WGD_scoring_matrix.tmp.bed \\
+            | bgzip -c \\
+            > {output}
+            """
+    
+rule WGDScore:
+    input:
+        WGD_matrix = rules.BuildWGDMatrix.output,
+    output:
+        WGD_scores = config['base']['results_dir'] + '/EvidenceQC/WGD/' + config['base']['batch'] +'_WGD_scores.txt.gz',
+        WGD_dist = config['base']['results_dir'] + '/EvidenceQC/WGD/' + config['base']['batch'] +'_WGD_score_distributions.pdf'
+    params:
+        wgd_scoring_mask = config['evidenceQC']['wgd_scoring_mask']
+    shell:
+        "set -euo pipefail && "
+        "Rscript ./src/WGD/bin/scoreDosageBiases.R -z -O " + config['base']['results_dir'] + "/EvidenceQC/WGD {input} {params} && "
+        "mv " + config['base']['results_dir'] + "/EvidenceQC/WGD/WGD_scores.txt.gz {output.WGD_scores} && "
+        "mv " + config['base']['results_dir'] + "/EvidenceQC/WGD/WGD_score_distributions.pdf {output.WGD_dist}"

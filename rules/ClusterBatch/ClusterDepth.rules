@@ -1,0 +1,142 @@
+#TASK: + Rewriting this part in combination of SVCluster
+
+########################################DEL#####################################################
+
+rule BedCluster_del:
+    input:
+        rules.MergeSet_Del.output
+    output:
+        preexclud = temp(OUTPUT_DIR + "/ClusterBatch/Depth/DEL/" + BATCH + ".DEL.{chrom}.preexcludelist.bed"),
+        final = OUTPUT_DIR + "/ClusterBatch/Depth/DEL/" + BATCH + ".DEL.{chrom}.bed"
+    params:
+        frac = 0.1,
+        flags="--merge-coordinates",
+        exclude_list= "resource/ClusterBatch/PESR.encode.peri_all.repeats.delly.hg38.blacklist.sorted.bed.gz",
+        batch= BATCH
+    threads:
+        workflow.cores * 0.2
+    conda: "../../envs/genomeAD.yaml"
+    shell:
+        """
+            svtk bedcluster {input} -r {wildcards.chrom} \\
+                -p {params.batch}_depth_del_{wildcards.chrom} \\
+                -f {params.frac} \\
+                {params.flags} \\
+                > {output.preexclud}
+            bedtools coverage -a {output.preexclud} -b {params.exclude_list} \\
+                | rev | cut -f5- | rev > ./tmp/excluded.del.{wildcards.chrom}.bed
+                cat <(head -1 {output.preexclud}) ./tmp/excluded.del.{wildcards.chrom}.bed > {output.final}
+                rm ./tmp/excluded.del.{wildcards.chrom}.bed
+        """
+
+rule ConcatBeds_del:
+    input:
+        expand(rules.BedCluster_del.output.final, chrom = CONTIG_LIST)
+    output:
+        OUTPUT_DIR + "/ClusterBatch/Depth/DEL/" + BATCH + ".DEL.bed"
+    params:
+        exclude_list_frac_max = 0.5,
+    conda: "../../envs/genomeAD.yaml"
+    shell:
+        """
+        cat {input} | grep -v "#chrom" >> ./tmp/tmp.del.bed
+        Rscript scripts/exclude_frac.r -I ./tmp/tmp.del.bed -O ./tmp/tmp.del.filtered.bed -f {params.exclude_list_frac_max}
+        echo -e "#chrom start end name svtype sample call_name vaf vac pre_rmsstd post_rmsstd" | sed -e 's/ /\\t/g' > ./tmp/tmp.header.del.bed
+        cat ./tmp/tmp.del.filtered.bed >> ./tmp/tmp.header.del.bed
+        bedtools sort -header -i ./tmp/tmp.header.del.bed > {output}
+        rm ./tmp/tmp.del.filtered.bed
+        rm ./tmp/tmp.del.bed
+        rm ./tmp/tmp.header.del.bed
+        """
+
+########################################DUP#####################################################
+
+rule BedCluster_dup:
+    input:
+        rules.MergeSet_Dup.output
+    output:
+        preexclud = temp(OUTPUT_DIR + "/ClusterBatch/Depth/DUP/" + BATCH + ".DUP.{chrom}.preexcludelist.bed"),
+        final = OUTPUT_DIR + "/ClusterBatch/Depth/DUP/" + BATCH + ".DUP.{chrom}.bed"
+    params:
+        frac = 0.1,
+        flags="--merge-coordinates",
+        exclude_list= "resource/ClusterBatch/PESR.encode.peri_all.repeats.delly.hg38.blacklist.sorted.bed.gz",
+        batch= BATCH
+    threads:
+        workflow.cores * 0.2
+    conda: "../../envs/genomeAD.yaml"
+    shell:
+        """
+            svtk bedcluster {input} -r {wildcards.chrom} \\
+            -p {params.batch}_depth_dup_{wildcards.chrom} \\
+            -f {params.frac} \\
+            {params.flags} \\
+            > {output.preexclud}
+            bedtools coverage -a {output.preexclud} -b {params.exclude_list} \\
+            | rev | cut -f5- | rev > ./tmp/excluded.dup.{wildcards.chrom}.bed
+            cat <(head -1 {output.preexclud}) ./tmp/excluded.dup.{wildcards.chrom}.bed > {output.final}
+            rm ./tmp/excluded.dup.{wildcards.chrom}.bed
+        """
+
+rule ConcatBeds_dup:
+    input:
+        expand(rules.BedCluster_dup.output.final, chrom = CONTIG_LIST)
+    output:
+        OUTPUT_DIR + "/ClusterBatch/Depth/DUP/" + BATCH + ".DUP.bed"
+    params:
+        exclude_list_frac_max = 0.5,
+    conda: "../../envs/genomeAD.yaml"
+    shell:
+        """
+        cat {input} | grep -v "#chrom" >> ./tmp/tmp.dup.bed
+        Rscript scripts/exclude_frac.r -I ./tmp/tmp.dup.bed -O ./tmp/tmp.dup.filtered.bed -f {params.exclude_list_frac_max}
+        echo -e "#chrom start end name svtype sample call_name vaf vac pre_rmsstd post_rmsstd" | sed -e 's/ /\\t/g' > ./tmp/tmp.header.dup.bed
+        cat ./tmp/tmp.dup.filtered.bed >> ./tmp/tmp.header.dup.bed
+        bedtools sort -header -i ./tmp/tmp.header.dup.bed > {output}
+        rm ./tmp/tmp.dup.filtered.bed
+        rm ./tmp/tmp.dup.bed
+        rm ./tmp/tmp.header.dup.bed
+        """
+
+########################################DepthTest#####################################################
+
+rule MakeRDtest_bed:
+    input:
+        del_bed = rules.ConcatBeds_del.output,
+        dup_bed = rules.ConcatBeds_dup.output,
+    output:
+        OUTPUT_DIR + "/ClusterBatch/Depth/" + BATCH + ".DEPTH.bed"
+    conda: "../../envs/genomeAD.yaml"
+    shell:
+        """
+        set -euo pipefail
+        python3 ./src/sv-pipeline/scripts/make_depth_rdtest_bed.py {input.del_bed} | sed '1d' > ./tmp/del.bed
+        python3 ./src/sv-pipeline/scripts/make_depth_rdtest_bed.py {input.dup_bed} | sed '1d' > ./tmp/dup.bed
+        echo -e "#chrom start end name samples svtype" | sed -e 's/ /\\t/g' > {output}
+        cat ./tmp/del.bed ./tmp/dup.bed | sort -k1,1V -k2,2n >> {output}
+        rm ./tmp/del.bed ./tmp/dup.bed
+        """
+
+rule MakeDepth_VCF:
+    input:
+        rules.MakeRDtest_bed.output
+    output:
+        vcf = OUTPUT_DIR + "/ClusterBatch/Depth/" + BATCH + ".depth.vcf.gz",
+        idx = OUTPUT_DIR + "/ClusterBatch/Depth/" + BATCH + ".depth.vcf.gz.tbi"
+    params:
+        contig = REF38+".fai"
+    conda: "../../envs/genomeAD.yaml"
+    shell:
+        """
+        set -euo pipefail
+        cut -f5 {input} | sed -e '1d' -e 's/,/\\n/g' | sort -u > ./tmp/samples.list
+        if [ -f {output.idx} ]; then
+            rm {output.idx}
+        fi
+        svtk rdtest2vcf --contigs {params.contig} {input} ./tmp/samples.list {output.vcf}
+        touch {output.idx}
+        rm ./tmp/samples.list
+        """
+
+
+

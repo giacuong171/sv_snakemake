@@ -1,0 +1,52 @@
+## THIS PART IS STILL ON PROGRESS
+##### config file #####
+import pandas as pd
+#validate(config, schema="../schemas/config.schema.yaml")
+
+##### sample sheets #####
+
+df = pd.read_csv(config["samples"], sep="\t").set_index("sample", drop=False)
+#validate(samples, schema="../schemas/samples.schema.yaml")
+sample_names = df.index.values
+
+REF38=config['ref_38']['fasta']
+INPUT_BAM=config['base']['data_dir']
+OUTPUT_DIR=config['base']['results_dir']
+MEMORY_USAGE=config['base']['mem_mb']
+JV_MEM="-Xmx" + config['JAVA_ARGS']['MAX_MEMORY']
+GATK_thread=config['GATK']['MAX_THREADS']
+BATCH=config['base']['batch']
+CONTIG_LIST=["chr1","chr2","chr3","chr4","chr5","chr6","chr7","chr8","chr9","chr10","chr11","chr12","chr13","chr14","chr15","chr16","chr17","chr18","chr19","chr20","chr21","chr22","chrX","chrY"]
+AUTOSOMAL=["chr1","chr2","chr3","chr4","chr5","chr6","chr7","chr8","chr9","chr10","chr11","chr12","chr13","chr14","chr15","chr16","chr17","chr18","chr19","chr20","chr21","chr22"]
+MALE=["chrX","chrY"]
+FEMALE=["chrX"]
+ALGO = ["depth","manta","wham"]
+CALLER= ["manta","wham"]
+
+def get_mem_mb(wildcards, attempt):
+    """
+    First attempt uses 10 MB, second attempt uses 100MB, third 1GB,
+    etc etc
+    """
+    return 5000**attempt
+
+def get_bam_file(wildcards):
+    if wildcards.sample in sample_names:
+        return df.loc[wildcards.sample]['bam_files']
+    else:
+        return ""
+
+def get_vcf_file(wildcards):
+    if wildcards.sample in sample_names:
+        return df.loc[wildcards.sample]['vcf_files']
+    else:
+        return ""
+
+def sep_gender_sample(gender_file, gender):
+    colnames=["familyID","sampleID","gender"]
+    gender_df = pd.read_csv(gender_file,sep="\t",names=colnames)
+    gd_arr=[]
+    for i in range(len(gender_df)):
+        if (gender_df["gender"][i] == gender):
+            gd_arr.append(gender_df["sampleID"][i])
+    return gd_arr

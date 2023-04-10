@@ -1,0 +1,117 @@
+
+rule GcnvVcfToBed:
+    input:
+        vcf = rules.PostProcess.output.seg,
+        contig_call_tar=OUTPUT_DIR + "/GatherSampleEvidence/TrainGCNV/" + BATCH + "-calls/{sample}.contig_ploidy_calls.tar.gz",
+    output:
+        del_bed = OUTPUT_DIR + "/GatherBatchEvidence/DP/{sample}/{sample}.del.bed",
+        dup_bed = OUTPUT_DIR + "/GatherBatchEvidence/DP/{sample}/{sample}.dup.bed",
+    params:
+        qs_cutoff = 30,
+        ext_dir = OUTPUT_DIR + "/GatherBatchEvidence/DP/{sample}",
+        sp = OUTPUT_DIR + "/GatherBatchEvidence/DP/{sample}"
+    conda: "../../envs/genomeAD.yaml"
+    threads: 4
+    shell:
+        """
+            set -e
+            tar -xzf {input.contig_call_tar} -C {params.ext_dir}
+            python src/WGD/bin/convert_gcnv.py \\
+                --cutoff {params.qs_cutoff} \\
+                --ploidy_calls {params.ext_dir}/contig_ploidy.tsv \\
+                --segments_vcf {input.vcf} \\
+                --input_sample {wildcards.sample} \\
+                --output_dir {params.sp}
+            touch {output.del_bed} 
+            touch {output.dup_bed}
+        """
+
+rule MergeSample_del:
+    input:
+        gcnv = rules.GcnvVcfToBed.output.del_bed,
+        cnmops_s = rules.CleanCNMops_rsmall.output.Del,
+        cnmops_l = rules.CleanCNMops_rlarge.output.Del,
+    output:
+        OUTPUT_DIR + "/GatherBatchEvidence/DP/{sample}/{sample}.del.merged.defrag.sorted.bed"
+    params:
+        max_dist=0.25
+    conda: "../../envs/genomeAD.yaml"
+    threads: workflow.cores * 0.2
+    shell:
+        """
+            set -euo pipefail
+            cat {input.cnmops_l} {input.cnmops_s} | awk -F "\\t" -v OFS="\\t" '{{if ($5=="{wildcards.sample}") print}}' > ./tmp/{wildcards.sample}.del.cnmops.cnv
+            cat {input.gcnv} ./tmp/{wildcards.sample}.del.cnmops.cnv | sort -k1,1V -k2,2n > ./tmp/{wildcards.sample}.del.bed
+            bedtools merge -i ./tmp/{wildcards.sample}.del.bed -d 0 -c 4,5,6,7 -o distinct > ./tmp/{wildcards.sample}.del.merged.bed
+            src/sv-pipeline/00_preprocessing/scripts/defragment_cnvs.py \\
+                --max-dist {params.max_dist} \\
+                ./tmp/{wildcards.sample}.del.merged.bed \\
+                ./tmp/{wildcards.sample}.del.merged.defrag.bed
+            sort -k1,1V -k2,2n ./tmp/{wildcards.sample}.del.merged.defrag.bed > {output}
+            rm ./tmp/{wildcards.sample}.del.cnmops.cnv \\
+                ./tmp/{wildcards.sample}.del.bed \\
+                ./tmp/{wildcards.sample}.del.merged.bed \\
+                ./tmp/{wildcards.sample}.del.merged.defrag.bed
+        """
+
+rule MergeSample_dup:
+    input:
+        gcnv = rules.GcnvVcfToBed.output.dup_bed,
+        cnmops_s = rules.CleanCNMops_rsmall.output.Dup,
+        cnmops_l = rules.CleanCNMops_rlarge.output.Dup,
+    output:
+        OUTPUT_DIR + "/GatherBatchEvidence/DP/{sample}/{sample}.dup.merged.defrag.sorted.bed"
+    params:
+        max_dist=0.25
+    conda: "../../envs/genomeAD.yaml"
+    threads: workflow.cores * 0.2
+    shell:
+        """
+            set -euo pipefail
+            cat {input.cnmops_l} {input.cnmops_s} | awk -F "\\t" -v OFS="\\t" '{{if ($5=="{wildcards.sample}") print}}' > ./tmp/{wildcards.sample}.dup.cnmops.cnv
+            cat {input.gcnv} ./tmp/{wildcards.sample}.dup.cnmops.cnv | sort -k1,1V -k2,2n > ./tmp/{wildcards.sample}.dup.bed
+            bedtools merge -i ./tmp/{wildcards.sample}.dup.bed -d 0 -c 4,5,6,7 -o distinct > ./tmp/{wildcards.sample}.dup.merged.bed
+            src/sv-pipeline/00_preprocessing/scripts/defragment_cnvs.py \\
+                --max-dist {params.max_dist} \\
+                ./tmp/{wildcards.sample}.dup.merged.bed \\
+                ./tmp/{wildcards.sample}.dup.merged.defrag.bed
+            sort -k1,1V -k2,2n ./tmp/{wildcards.sample}.dup.merged.defrag.bed > {output}
+            rm ./tmp/{wildcards.sample}.dup.cnmops.cnv \\
+                ./tmp/{wildcards.sample}.dup.bed \\
+                ./tmp/{wildcards.sample}.dup.merged.bed \\
+                ./tmp/{wildcards.sample}.dup.merged.defrag.bed
+        """
+
+rule MergeSet_Del:
+    input:
+        expand(rules.MergeSample_del.output,sample = sample_names)
+    output:
+        OUTPUT_DIR + "/GatherBatchEvidence/DP/" + BATCH + ".DEL.bed.gz"
+    params:
+        batch=BATCH
+    shell:
+        """
+            cat {input} \\
+                | sort -k1,1V -k2,2n \\
+                | awk -v OFS="\t" -v svtype="DEL" -v batch={params.batch} '{{$4=batch"_"svtype"_"NR; print}}' \\
+                | cat <(echo -e "#chr\\tstart\\tend\\tname\\tsample\\tsvtype\\tsources") - \\
+                | bgzip -c > {output}
+            tabix -p bed {output}
+        """
+
+rule MergeSet_Dup:
+    input:
+        expand(rules.MergeSample_dup.output,sample = sample_names)
+    output:
+        OUTPUT_DIR + "/GatherBatchEvidence/DP/" + BATCH + ".DUP.bed.gz"
+    params:
+        batch=BATCH
+    shell:
+        """
+            cat {input} \\
+                | sort -k1,1V -k2,2n \\
+                | awk -v OFS="\t" -v svtype="DUP" -v batch={params.batch} '{{$4=batch"_"svtype"_"NR; print}}' \\
+                | cat <(echo -e "#chr\\tstart\\tend\\tname\\tsample\\tsvtype\\tsources") - \\
+                | bgzip -c > {output}
+            tabix -p bed {output}
+        """

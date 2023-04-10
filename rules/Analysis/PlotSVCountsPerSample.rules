@@ -1,0 +1,42 @@
+rule PlotSVCountsWithCutoff:
+    input:
+        svcount = rules.CountSVsPerSamplePerType.output
+    output:
+        svcount_dis_plot = OUTPUT_DIR + "/Analysis/GenerateBatchMetrics/" + BATCH + ".{source}.all_SVTYPEs.counts_per_sample.png",
+        outliers_list = OUTPUT_DIR + "/Analysis/GenerateBatchMetrics/" + BATCH + ".{source}.SV_count_outlier_samples.txt",
+    singularity:
+        "sif_images/rdtest.sif"
+    params:
+        prefix = BATCH + ".{source}",
+        N_IQR_cutoff=6,
+        op_dir =  OUTPUT_DIR + "/Analysis/GenerateBatchMetrics"
+    shell:
+        """
+        Rscript src/sv-pipeline/scripts/downstream_analysis_and_filtering/determine_svcount_outliers.R \\
+        -p {params.prefix} \\
+        -I {params.N_IQR_cutoff} \\
+        {input.svcount} \\
+        {params.op_dir}
+        """
+
+rule CatOutliersPreview:
+    input:
+        expand(rules.PlotSVCountsWithCutoff.output.outliers_list, source= ['manta','wham','depth'])
+    output:
+        OUTPUT_DIR + "/Analysis/GenerateBatchMetrics/" + BATCH + ".outliers_preview.samples.txt"
+    run:
+        outliers_dict = {}
+        for file in input:
+            with open(file, 'r') as IN:
+                for line in IN:
+                    if line.strip().startswith("#sample"):
+                        continue
+                sample, reason = line.strip().split("\t")
+                if sample in outliers_dict:
+                    outliers_dict[sample].add(reason)
+                else:
+                    outliers_dict[sample] = {reason}
+        with open(output, 'w') as OUT:
+            OUT.write("#sample\treason\n")
+            for sample in sorted(list(outliers_dict.keys())):
+                OUT.write(sample + "\t" + ",".join(outliers_dict[sample]) + "\n")

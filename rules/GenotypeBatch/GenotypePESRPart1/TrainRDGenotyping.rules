@@ -1,0 +1,280 @@
+rule MakeTrainingBed:
+    input:
+        sample_list = rules.FilterSampleList.output
+    output:
+        OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/train.bed"
+    params:
+        reference_build = "hg38",
+        sample = "VN_01_00_0005"
+    threads: 2
+    shell:
+        """
+        if [ {params.reference_build} == "hg19" ]; then
+            awk -v OFS="\\t" -v sample={params.sample} '{{$5=sample; print $1, $2, $3, $4, $5, $6}}' src/RdTest/1kg.train.loci.bed > {output}
+        else 
+            awk -v OFS="\\t" -v sample={params.sample} '{{$5=sample; print $1, $2, $3, $4, $5, $6}}' src/RdTest/train_hg38_reviewed_final.bed > {output}
+        fi
+        """
+
+rule Evidence_newCov:
+    input:
+        bed = rules.MakeTrainingBed.output,
+        cov_file = rules.ZPaste.output.matrix_file,
+    output:
+        evidence = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/local.RD.txt.gz",
+    singularity:
+        "sif_images/gatk-nightly_latest.sif"
+    threads: 8
+    params:
+        mem=JV_MEM,
+        ref_dict="resource/Homo_sapiens_assembly38.dict",
+    shell:
+        """
+        gatk --java-options "{params.mem}" \\
+                PrintSVEvidence \\
+                --sequence-dictionary {params.ref_dict} \\
+                --evidence-file {input.cov_file} \\
+                -L {input.bed} \\
+                -O {output.evidence}
+        tabix -fp bed {output.evidence}
+        """
+
+rule RDTestGenotype:
+    input:
+        bed = rules.MakeTrainingBed.output,
+        cov_file = rules.Evidence_newCov.output,
+        med_cov = rules.T_CalcMedCov.output,
+        famfile = rules.Subset_ped_file.output,
+        samples = rules.FilterSampleList.output
+    output: 
+        genotypes = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/" + BATCH + ".pesr.geno",
+        copy_states = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/" + BATCH + ".pesr.median_geno",
+        metrics = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/" + BATCH + ".pesr.metrics",
+        gq = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/" + BATCH + ".pesr.gq",
+        varGQ = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/" + BATCH + ".pesr.vargq",
+        melted_genotypes = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/rd.geno.cnv.bed.gz"
+    params:
+        n_bins = 100000,
+        op_dir = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/",
+        bin_exclude= config['ref_38']['bin_exclude'],
+        gt_cutoffs = config['ref_38']['seed_cutoff'],
+        prefix= BATCH + ".pesr"
+    singularity:
+        "sif_images/rdtest.sif"
+    shell:
+        """
+        Rscript src/RdTest/RdTest.R \\
+            -b {input.bed} \\
+            -c {input.cov_file} \\
+            -m {input.med_cov} \\
+            -f {input.famfile} \\
+            -o {params.op_dir} \\
+            -n {params.prefix} \\
+            -w  {input.samples} \\
+            -i {params.n_bins} \\
+            -r {params.gt_cutoffs} \\
+            -y {params.bin_exclude} \\
+            -g TRUE
+        
+        echo "" | bgzip -c > {output.melted_genotypes}
+
+        touch {output}
+        """
+
+rule GenerateCutoff:
+    input:
+        rules.RDTestGenotype.output.copy_states
+    output:
+        OUTPUT_DIR + "/GenotypeBatch/" + BATCH + ".pesr.cutoffs"
+    singularity:
+        "sif_images/rdtest.sif"
+    params:
+        max_copystate=4
+    shell:
+        """
+        Rscript src/RdTest/generate_cutoff.R {input} {params.max_copystate} {output}
+        """
+
+rule UpdateCutoff:
+    input:
+        rf_cutoffs = rules.AdjudicateSV.output.cutoffs,
+        gt_cutoffs = rules.GenerateCutoff.output,
+    output:
+        pesr_sepcutoff = OUTPUT_DIR + "/GenotypeBatch/" + BATCH + ".pesr.pesr_sepcutoff.txt",
+        depth_sepcutoff = OUTPUT_DIR + "/GenotypeBatch/" + BATCH + ".pesr.depth_sepcutoff.txt",
+    shell:
+        """
+        scripts/UpdateCutoffs.sh {input.rf_cutoffs} {input.gt_cutoffs} {output.pesr_sepcutoff} {output.depth_sepcutoff}
+        """
+
+rule SplitVariants_gt:
+    input:
+        vcf = OUTPUT_DIR + "/FilterBatch/" + BATCH + ".filtered_pesr_merged.vcf.gz"
+    output:
+        gt5kb = OUTPUT_DIR + "/GenotypeBatch/" + BATCH +".pesr.gt5kb.bed",
+        lt5kb = OUTPUT_DIR + "/GenotypeBatch/" + BATCH +".pesr.lt5kb.bed",
+    conda:
+        "../../../envs/genomeAD.yaml"
+    shell:
+        """
+        svtk vcf2bed {input.vcf} stdout \\
+            | awk -v OFS="\\t" '(($5=="DEL" || $5=="DUP") && $3-$2>=5000) {{print $1, $2, $3, $4, $6, $5}}' > {output.gt5kb}
+        
+        svtk vcf2bed {input.vcf} stdout \\
+            | awk -v OFS="\\t" '(($5=="DEL" || $5=="DUP") && $3-$2<5000) {{print $1, $2, $3, $4, $6, $5}}' > {output.lt5kb}
+        
+        """
+
+rule Evidence_Over5kb:
+    input:
+        bed = rules.SplitVariants_gt.output.gt5kb,
+        cov_file = rules.ZPaste.output.matrix_file,
+    output:
+        evidence = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/Over5kb/local.RD.txt.gz",
+    singularity:
+        "sif_images/gatk-nightly_latest.sif"
+    threads: 8
+    params:
+        mem=JV_MEM,
+        ref_dict="resource/Homo_sapiens_assembly38.dict",
+    shell:
+        """
+        gatk --java-options "{params.mem}" \\
+                PrintSVEvidence \\
+                --sequence-dictionary {params.ref_dict} \\
+                --evidence-file {input.cov_file} \\
+                -L {input.bed} \\
+                -O {output.evidence}
+        tabix -fp bed {output.evidence}
+        """
+rule RDTestGenotypeOver5kb:
+    input:
+        bed = rules.SplitVariants_gt.output.gt5kb,
+        cov_file = rules.Evidence_Over5kb.output,
+        med_cov = rules.T_CalcMedCov.output,
+        famfile = rules.Subset_ped_file.output,
+        samples = rules.FilterSampleList.output,
+        gt_cutoffs = rules.UpdateCutoff.output.pesr_sepcutoff,
+    output: 
+        genotypes = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/Over5kb/" + BATCH + ".pesr.geno",
+        copy_states = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/Over5kb/" + BATCH + ".pesr.median_geno",
+        metrics = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/Over5kb/" + BATCH + ".pesr.metrics",
+        gq = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/Over5kb/" + BATCH + ".pesr.gq",
+        varGQ = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/Over5kb/" + BATCH + ".pesr.vargq",
+        melted_genotypes = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/Over5kb/rd.geno.cnv.bed.gz"
+    params:
+        n_bins = 100000,
+        op_dir = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/Over5kb/",
+        bin_exclude= config['ref_38']['bin_exclude'],
+        prefix= BATCH + ".pesr"
+    singularity:
+        "sif_images/rdtest.sif"
+    shell:
+        """
+        Rscript src/RdTest/RdTest.R \\
+            -b {input.bed} \\
+            -c {input.cov_file} \\
+            -m {input.med_cov} \\
+            -f {input.famfile} \\
+            -o {params.op_dir} \\
+            -n {params.prefix} \\
+            -w  {input.samples} \\
+            -i {params.n_bins} \\
+            -r {input.gt_cutoffs} \\
+            -y {params.bin_exclude} \\
+            -g TRUE
+        
+        echo "" | bgzip -c > {output.melted_genotypes}
+
+        touch {output}
+        """
+
+rule Evidence_lt5kb:
+    input:
+        bed = rules.SplitVariants_gt.output.lt5kb,
+        cov_file = rules.ZPaste.output.matrix_file,
+    output:
+        evidence = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/Lesst5kb/local.RD.txt.gz",
+    singularity:
+        "sif_images/gatk-nightly_latest.sif"
+    threads: 8
+    params:
+        mem=JV_MEM,
+        ref_dict="resource/Homo_sapiens_assembly38.dict",
+    shell:
+        """
+        gatk --java-options "{params.mem}" \\
+                PrintSVEvidence \\
+                --sequence-dictionary {params.ref_dict} \\
+                --evidence-file {input.cov_file} \\
+                -L {input.bed} \\
+                -O {output.evidence}
+        tabix -fp bed {output.evidence}
+        """
+rule RDTestGenotypeLesst5kb:
+    input:
+        bed = rules.SplitVariants_gt.output.lt5kb,
+        cov_file = rules.Evidence_lt5kb.output,
+        med_cov = rules.T_CalcMedCov.output,
+        famfile = rules.Subset_ped_file.output,
+        samples = rules.FilterSampleList.output,
+        gt_cutoffs = rules.UpdateCutoff.output.pesr_sepcutoff,
+    output: 
+        genotypes = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/Lesst5kb/" + BATCH + ".pesr.geno",
+        copy_states = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/Lesst5kb/" + BATCH + ".pesr.median_geno",
+        metrics = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/Lesst5kb/" + BATCH + ".pesr.metrics",
+        gq = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/Lesst5kb/" + BATCH + ".pesr.gq",
+        varGQ = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/Lesst5kb/" + BATCH + ".pesr.vargq",
+        melted_genotypes = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/Lesst5kb/rd.geno.cnv.bed.gz"
+    params:
+        n_bins = 100000,
+        op_dir = OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/Lesst5kb/",
+        bin_exclude= config['ref_38']['bin_exclude'],
+        prefix= BATCH + ".pesr"
+    singularity:
+        "sif_images/rdtest.sif"
+    shell:
+        """
+        Rscript src/RdTest/RdTest.R \\
+            -b {input.bed} \\
+            -c {input.cov_file} \\
+            -m {input.med_cov} \\
+            -f {input.famfile} \\
+            -o {params.op_dir} \\
+            -n {params.prefix} \\
+            -w  {input.samples} \\
+            -i {params.n_bins} \\
+            -r {input.gt_cutoffs} \\
+            -y {params.bin_exclude} \\
+            -g TRUE
+        
+        echo "" | bgzip -c > {output.melted_genotypes}
+
+        touch {output}
+        """
+
+rule MergeGenotypeResults:
+    input:
+        pesr_genotypes = rules.RDTestGenotypeLesst5kb.output.genotypes,
+        gt5kb_genotypes = rules.RDTestGenotypeOver5kb.output.genotypes,
+        pesr_GQ = rules.RDTestGenotypeLesst5kb.output.gq,
+        gt5kb_GQ= rules.RDTestGenotypeOver5kb.output.gq,
+        pesr_varGQ= rules.RDTestGenotypeLesst5kb.output.varGQ,
+        gt5kb_varGQ= rules.RDTestGenotypeOver5kb.output.varGQ,
+    output:
+        genotypes =  OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/Results/rd.geno.all",
+        GQ =  OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/Results/rd.GQ.all",
+        tmp_melted_genotypes = temp(OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/Results/rd.geno.cnv.bed"),
+        melted_genotypes =  OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/Results/rd.geno.cnv.bed.gz",
+        varGQ =  OUTPUT_DIR + "/GenotypeBatch/GenotypePESRPart1/Results/rd.varGQ.all",
+    conda:
+        "../../../envs/genomeAD.yaml"
+    shell:
+        """
+        cat {input.pesr_genotypes} {input.gt5kb_genotypes} | awk '!_[$0]++' > {output.genotypes};
+        cat {input.pesr_GQ} {input.gt5kb_GQ} | awk '!_[$0]++' > {output.GQ};
+        cat {input.pesr_varGQ} {input.gt5kb_varGQ} | awk '!_[$0]++' > {output.varGQ};
+        
+        python src/sv-pipeline/04_variant_resolution/scripts/merge_RdTest_genotypes.py {output.genotypes} {output.GQ} {output.tmp_melted_genotypes};
+        sort -k1,1V -k2,2n {output.tmp_melted_genotypes} | uniq | bgzip -c > {output.melted_genotypes}
+        """
